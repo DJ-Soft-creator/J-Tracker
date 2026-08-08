@@ -181,4 +181,4 @@ Die App verwendet ein durchgängiges Dark-Only Design mit Tailwind CSS (CDN). Da
 
 ## Lizenz
 
-Eigenprojekt.
+Eigenprojekt von DJ-Soft-creator

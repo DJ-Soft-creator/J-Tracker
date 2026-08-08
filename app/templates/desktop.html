@@ -1,0 +1,2268 @@
+<!DOCTYPE html>
+<html lang="de" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="{% if IS_DEV %}#450a0a{% else %}#030712{% endif %}" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Journl" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+  <title>Journl</title>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+  <link rel="preconnect" href="https://cdn.tailwindcss.com">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { max-width: 100%; overflow-x: hidden; }
+    body { -webkit-tap-highlight-color: transparent; }
+    textarea, input[type="text"], input[type="number"] { font-size: 16px !important; }
+    .tab-btn.active { border-bottom-color: #4ade80; color: #4ade80; }
+    .form-field { margin-bottom: 1rem; }
+    .form-field label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.25rem; color: #d1d5db; }
+    .form-field input, .form-field textarea, .form-field select {
+      width: 100%; border-radius: 0.5rem; background-color: #1f2937; border: 1px solid #374151; padding: 0.625rem 0.875rem; color: #f3f4f6; outline: none;
+    }
+    .form-field input:focus, .form-field textarea:focus, .form-field select:focus { box-shadow: 0 0 0 2px #22c55e; border-color: #4ade80; }
+    ::-webkit-scrollbar { width: 0; height: 0; }
+
+    @keyframes wipeOut {
+      0%   { opacity: 1; transform: translateY(0); filter: blur(0); }
+      60%  { opacity: 0; transform: translateY(-8px); filter: blur(4px); }
+      100% { opacity: 0; transform: translateY(-8px); filter: blur(4px); }
+    }
+
+    .wipe-out {
+      animation: wipeOut 0.35s ease-out forwards;
+    }
+
+    #app, main, .tab-content { min-width: 0; max-width: 100%; }
+
+    #input-area {
+      box-sizing: border-box;
+      display: flex;
+      flex: 0 0 auto;
+      flex-direction: column;
+      width: calc(100% - clamp(16px, 10vw, 100px));
+      height: 35%;
+      max-width: calc(100% - min(16px, 8vw));
+      min-width: 0;
+      min-height: 10rem;
+      margin-inline: auto;
+      padding-top: 0.75rem;
+    }
+
+    #input-surface {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 6rem;
+      overflow: hidden;
+    }
+
+    #simple-input,
+    #form-container {
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-color: #4b5563 transparent;
+      scrollbar-width: thin;
+    }
+
+    #simple-input { display: block; }
+    #form-container { padding-right: 0.25rem; }
+
+    #simple-input::-webkit-scrollbar,
+    #form-container::-webkit-scrollbar { width: 8px; }
+    #simple-input::-webkit-scrollbar-track,
+    #form-container::-webkit-scrollbar-track { background: transparent; }
+    #simple-input::-webkit-scrollbar-thumb,
+    #form-container::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 999px; }
+
+    #input-resize-controls {
+      display: flex;
+      flex: 0 0 2.5rem;
+      width: 2.5rem;
+      height: 2.5rem;
+    }
+
+    .input-resize-handle {
+      appearance: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 2.5rem;
+      height: 2.5rem;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: 0.375rem;
+      background: transparent;
+      color: #6b7280;
+      line-height: 1;
+      cursor: nwse-resize;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      transition: border-color 0.15s, background-color 0.15s, color 0.15s;
+    }
+
+    .input-resize-handle:hover,
+    .input-resize-handle:focus-visible,
+    .input-resize-handle.dragging {
+      border-color: #4b5563;
+      background: #1f2937;
+      color: #d1d5db;
+      outline: none;
+    }
+
+    .input-resize-icon { font-size: 1rem; }
+    #input-area.resizing #input-surface { pointer-events: none; }
+
+    .desktop-controls {
+      position: static !important;
+      box-sizing: border-box;
+      flex-shrink: 0;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      padding-left: 24px;
+      padding-right: 24px;
+    }
+
+    .desktop-controls > div { min-width: 0; max-width: 100%; }
+
+    .desktop-ai-wrapper {
+      position: static !important;
+      box-sizing: border-box;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      padding-left: 24px;
+      padding-right: 24px;
+    }
+
+    #tab-write {
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+      min-width: 0;
+    }
+
+    .journal-family-tag { color: #f9a8d4; }
+    .journal-approved-tag { color: #86efac; }
+    .journal-proposed-tag { color: #fdba74; }
+    .journal-ai-tag { color: #bae6fd; }
+    .journal-ai-text { color: #bae6fd; }
+    .brain-family-entry { border-color: rgba(244, 114, 182, 0.35); background-color: rgba(131, 24, 67, 0.16); }
+    @keyframes writeAiGlow { 0%, 100% { box-shadow: 0 0 0 rgba(96,165,250,0); } 50% { box-shadow: 0 0 16px rgba(96,165,250,.75); } }
+    .write-ai-working { animation: writeAiGlow 2.4s ease-in-out infinite; }
+    /* Presentation-only DEV paint override; application data paths stay untouched. */
+    html.youtube-mode, .youtube-mode body { background: #030712 !important; }
+    .youtube-mode .bg-red-950 { background-color: #030712 !important; }
+    .youtube-mode .bg-red-900 { background-color: #111827 !important; }
+  </style>
+</head>
+<body class="{% if IS_DEV %}bg-red-950{% else %}bg-gray-950{% endif %} text-gray-100 flex flex-col" style="overflow: hidden; height: 100dvh;">
+
+  <!-- Login overlay -->
+  <div id="login-overlay" class="fixed inset-0 z-50 flex items-center justify-center px-4 {% if IS_DEV %}bg-red-950{% else %}bg-gray-950{% endif %}">
+    <div class="w-full max-w-sm">
+      <img src="{{ url_for('static', filename='logo-dark.png') }}" alt="Journl" class="mx-auto mb-8 h-28 w-28 rounded-3xl object-cover" />
+      <form id="login-form" class="bg-gray-900 rounded-xl p-6 shadow-xl border border-gray-800">
+        <h2 class="text-xl font-semibold mb-6 text-center">Login</h2>
+        <div class="mb-4">
+          <label class="block text-sm font-medium mb-1" for="username">Username</label>
+          <input class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                 id="username" name="username" type="text" autofocus />
+        </div>
+        <div class="mb-6">
+          <label class="block text-sm font-medium mb-1" for="password">Password</label>
+          <input class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                 id="password" name="password" type="password" />
+        </div>
+        <button type="submit" class="w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 px-4 rounded-lg transition">
+          Einloggen
+        </button>
+        <p id="login-error" class="text-red-400 text-sm text-center mt-3 hidden">Falsche Zugangsdaten.</p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <div id="app" class="flex flex-col h-full hidden">
+
+    <!-- Header -->
+    <header id="app-header" class="{% if IS_DEV %}bg-red-900{% else %}bg-gray-900{% endif %} border-b border-gray-800 px-5 py-3 flex items-center justify-between shrink-0">
+      <img src="{{ url_for('static', filename='logo-dark.png') }}" alt="Journl" class="h-9 w-9 rounded-lg object-cover" />
+      <div class="flex items-center gap-3">
+        <span id="youtube-mode-banner" class="hidden rounded-full border border-amber-300/70 bg-amber-400/15 px-2 py-0.5 text-xs font-semibold text-amber-200 whitespace-nowrap">YouTube-Mode</span>
+        <span id="clock" class="text-xs text-gray-500 font-mono"></span>
+        <span id="header-username" class="text-xs text-gray-400"></span>
+        <div class="relative">
+          <button id="burger-btn" class="text-gray-400 hover:text-white transition" title="Menü" aria-label="Menü">
+            <span class="text-xl leading-none" aria-hidden="true">☰</span>
+          </button>
+          <div id="burger-menu" class="hidden absolute right-0 mt-2 w-48 {% if IS_DEV %}bg-red-900{% else %}bg-gray-900{% endif %} border border-gray-800 rounded-lg shadow-xl py-1 z-50">
+            <div class="px-4 py-2 text-xs text-gray-400 border-b border-gray-800">
+              👤 <span id="burger-username">Bürger</span>
+            </div>
+            <button id="burger-settings" class="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 transition">⚙️ Einstellungen</button>
+            <button id="burger-logout" class="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-800 transition">🚪 Logout</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Tab navigation -->
+    <nav class="{% if IS_DEV %}bg-red-900{% else %}bg-gray-900{% endif %} border-b border-gray-800 flex shrink-0">
+      <button onclick="switchTab('write')" id="tab-btn-write"
+        class="tab-btn active flex-1 px-5 py-3 text-sm font-medium border-b-2 border-green-400 text-green-400 transition">
+        Schreiben
+      </button>
+      <button onclick="switchTab('dashboard')" id="tab-btn-dashboard"
+        class="tab-btn flex-1 px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-300 transition">
+        Heute
+      </button>
+      <button onclick="switchTab('family')" id="tab-btn-family"
+        class="tab-btn relative flex-1 px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-300 transition">
+        Familie
+        <span id="family-notify" class="hidden absolute left-1/2 -translate-x-1/2 bottom-1 h-[3px] w-12 rounded-full pointer-events-none"></span>
+      </button>
+      <button onclick="switchTab('brain')" id="tab-btn-brain"
+        class="tab-btn flex-1 px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-300 transition">
+        Brain
+      </button>
+    </nav>
+
+    <!-- Main content -->
+    <main class="flex-1 overflow-hidden flex flex-col" style="overscroll-behavior: none;">
+
+      <!-- Write tab -->
+      <div id="tab-write" class="tab-content flex flex-col flex-1 overflow-hidden">
+        <!-- Resizable input panel; it stays in normal flow and centered. -->
+          <div id="input-area">
+            <div id="input-surface">
+              <!-- Simple template: textarea with own scroll -->
+              <textarea id="simple-input" rows="7" placeholder="Notiz eingeben..."
+                class="w-full bg-gray-900/50 border border-gray-800 rounded-lg text-gray-100 focus:outline-none focus:border-gray-600 resize-none text-base leading-relaxed"></textarea>
+
+              <!-- Form templates container -->
+              <div id="form-container" class="space-y-4 pb-4"></div>
+            </div>
+
+            <div id="project-selector-container" class="hidden pt-2"></div>
+
+          </div>
+
+        <!-- All write actions share one stable row; only status text is rendered below. -->
+        <div class="desktop-controls px-6 py-3">
+          <div class="flex flex-nowrap gap-2 items-center w-full max-w-5xl mx-auto overflow-x-auto">
+            <div id="input-resize-controls" class="shrink-0">
+              <button type="button" class="input-resize-handle" data-resize-axis="xy"
+                      aria-label="Größe des Eingabebereichs ändern" title="Ziehen, um Breite und Höhe anzupassen">
+                <span class="input-resize-icon" aria-hidden="true">↘</span>
+              </button>
+            </div>
+            <select id="template-select" class="h-10 flex-1 basis-48 min-w-40 rounded-lg bg-gray-800/10 border border-gray-700/10 px-3 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none"></select>
+            <button id="submit-btn" onclick="handleSubmit()" class="h-10 bg-green-600/70 hover:bg-green-500 text-white font-semibold px-5 rounded-lg transition text-sm shrink-0">
+              Senden
+            </button>
+            <div id="ai-controls" class="hidden flex flex-nowrap gap-2 items-center shrink-0">
+              <select id="ai-provider-select" class="h-10 rounded-lg bg-gray-800/10 border border-gray-700/10 px-3 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none shrink-0"></select>
+              <select id="ai-function-select" class="h-10 rounded-lg bg-gray-800/10 border border-gray-700/10 px-3 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none shrink-0"></select>
+            </div>
+          </div>
+        </div>
+
+        <!-- AI response area -->
+        <div class="desktop-ai-wrapper">
+          <div id="ai-response-area" class="w-full max-w-lg mx-auto bg-gray-800/20 border border-blue-700/30 rounded-xl px-4 py-3 text-sm text-gray-300 leading-relaxed whitespace-pre-wrap hidden"></div>
+        </div>
+
+        <!-- App-generated info box (non-editable) -->
+        <div class="px-6 mt-3">
+          <div id="app-info-box" class="w-full max-w-lg mx-auto bg-gray-800/10 border border-gray-700/10 rounded-xl px-4 py-3 text-sm text-gray-400 leading-relaxed whitespace-pre-wrap pointer-events-none select-none"></div>
+        </div>
+
+      </div>
+
+      <!-- Dashboard tab -->
+      <div id="tab-dashboard" class="tab-content hidden flex flex-col flex-1 overflow-hidden">
+        <div id="dashboard-container" class="flex-1 overflow-y-auto px-[50px] py-3 space-y-3" style="min-height: 0;">
+          <p class="text-gray-500 text-center mt-8">Lade Einträge…</p>
+        </div>
+
+      </div>
+
+      <!-- Family tab -->
+      <div id="tab-family" class="tab-content hidden flex flex-col flex-1 overflow-hidden">
+        <div class="px-[50px] py-3 flex items-center gap-2 shrink-0">
+          <input id="family-search" type="text" placeholder="🔍 Suchen..."
+            class="flex-1 min-w-0 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <button type="button" onclick="openPlanner()" class="bg-green-600 hover:bg-green-500 text-white text-sm font-semibold px-3 py-2 rounded-lg transition shrink-0">+ Planen</button>
+          <button type="button" onclick="loadFamily()" class="text-green-500 hover:text-green-400 text-lg px-1 shrink-0" title="Aktualisieren" aria-label="Familienaufgaben aktualisieren">⟳</button>
+        </div>
+        <div id="family-container" class="flex-1 overflow-y-auto px-[50px] pb-3 space-y-3" style="min-height: 0;">
+          <p class="text-gray-500 text-center mt-8">Lade…</p>
+        </div>
+      </div>
+
+      <!-- Brain tab -->
+      <div id="tab-brain" class="tab-content hidden flex flex-col flex-1 min-w-0 overflow-hidden">
+        <div id="brain-app" class="flex flex-col flex-1 min-h-0 min-w-0 max-w-full overflow-hidden">
+          <div class="px-[50px] py-3 border-b border-gray-800 shrink-0 space-y-2">
+            <div class="flex flex-wrap gap-2">
+              <input id="brain-query" type="search" placeholder="Journale, Notizen und Projekte durchsuchen"
+                class="flex-1 basis-64 min-w-0 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500" />
+            </div>
+            <div id="brain-filter-controls" class="flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
+              <select id="brain-order" aria-label="Sortierung" class="h-7 rounded bg-gray-800 border border-gray-700 px-2 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-green-500">
+                <option value="newest">Neueste zuerst</option>
+                <option value="oldest">Älteste zuerst</option>
+                <option value="path">Dateipfad</option>
+              </select>
+              <input id="brain-range-start" type="date" class="sr-only" />
+              <input id="brain-range-end" type="date" class="sr-only" />
+              <button type="button" data-brain-date-picker="brain-range-start" class="h-7 w-7 inline-flex items-center justify-center rounded text-gray-500 hover:bg-gray-800 hover:text-gray-300" title="Startdatum wählen" aria-label="Startdatum wählen"><svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></button>
+              <button type="button" data-brain-date-picker="brain-range-end" class="h-7 w-7 inline-flex items-center justify-center rounded text-gray-500 hover:bg-gray-800 hover:text-gray-300" title="Enddatum wählen" aria-label="Enddatum wählen"><svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></button>
+              <span id="brain-range-summary" class="text-[11px] text-gray-600" aria-live="polite"></span>
+              <button id="brain-range-clear" type="button" class="hidden h-7 w-5 text-gray-600 hover:text-gray-300" title="Zeitraum zurücksetzen" aria-label="Zeitraum zurücksetzen">×</button>
+            </div>
+            <div class="flex flex-wrap items-center gap-3 min-w-0 max-w-full">
+              <button id="brain-mode-search" type="button" class="text-sm text-green-400 font-medium">Timeline &amp; Suche</button>
+              <button id="brain-mode-journals" type="button" class="text-sm text-gray-500 hover:text-gray-300">Nur Journale</button>
+              <button id="brain-mode-tasks" type="button" class="text-sm text-gray-500 hover:text-gray-300">Aufgaben</button>
+              <button id="brain-mode-notes" type="button" class="text-sm text-gray-500 hover:text-gray-300">Notizen</button>
+              <button id="brain-mode-projects" type="button" class="text-sm text-gray-500 hover:text-gray-300">Projekte</button>
+              <button id="brain-mode-family" type="button" class="text-sm text-gray-500 hover:text-gray-300">Familie</button>
+              <span id="brain-index-status" class="text-xs text-gray-600"></span>
+            </div>
+              <div id="brain-tags" class="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto overscroll-contain pr-1" aria-label="Tag-Filter"></div>
+          </div>
+          <div id="brain-browser" class="flex-1 min-h-0 min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-[50px] py-3 space-y-3">
+            <p class="text-gray-500 text-center mt-8">Brain wird geladen…</p>
+          </div>
+        </div>
+      </div>
+
+    </main>
+
+  </div>
+
+  <!-- Settings modal -->
+  <div id="settings-modal" class="fixed inset-0 z-50 hidden items-center justify-center px-4 bg-black/50">
+    <div class="w-full max-w-md bg-gray-900 border border-gray-800 rounded-xl shadow-xl max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800 sticky top-0 bg-gray-900">
+        <h2 class="text-lg font-semibold text-gray-100">Einstellungen</h2>
+        <button id="settings-close" class="text-gray-500 hover:text-white text-xl leading-none">×</button>
+      </div>
+      <div class="p-5 space-y-6">
+        <section>
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Profil</h3>
+          <div class="mb-2">
+            <label class="block text-xs text-gray-500 mb-1">Aktueller Benutzername</label>
+            <div id="settings-current-username" class="text-sm text-gray-200 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">–</div>
+          </div>
+          <div class="mb-2">
+            <label class="block text-xs text-gray-500 mb-1" for="settings-new-username">Neuer Benutzername</label>
+            <input id="settings-new-username" type="text" class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <button id="settings-save-username" class="bg-green-600 hover:bg-green-500 text-white text-sm font-semibold py-1.5 px-3 rounded transition">Speichern</button>
+        </section>
+        <section>
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Passwort ändern</h3>
+          <p class="text-xs text-gray-500 mb-2">Min. 8 Zeichen, Groß-/Kleinbuchstabe, Ziffer &amp; Sonderzeichen.</p>
+          <div class="space-y-2">
+            <input id="settings-old-password" type="password" placeholder="Altes Passwort" class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <input id="settings-new-password" type="password" placeholder="Neues Passwort" class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <input id="settings-confirm-password" type="password" placeholder="Neues Passwort bestätigen" class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <button id="settings-change-password" class="mt-2 bg-green-600 hover:bg-green-500 text-white text-sm font-semibold py-1.5 px-3 rounded transition">Passwort ändern</button>
+        </section>
+        <section>
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Vertraute Geräte</h3>
+          <div id="settings-devices-list" class="space-y-2 text-sm text-gray-300">
+            <p class="text-gray-500">Lade…</p>
+          </div>
+        </section>
+        {% if IS_DEV %}<section>
+          <h3 class="text-sm font-semibold text-gray-300 mb-1">Präsentation</h3>
+          <label class="flex items-center justify-between gap-3 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200"><span><span class="block font-medium">YouTube-Mode</span><span class="block text-xs text-gray-500">Nur Darstellung: DEV-Daten und DEV-Endpunkte bleiben aktiv.</span></span><input id="settings-youtube-mode" type="checkbox" class="h-5 w-5 accent-green-500" /></label>
+        </section>{% endif %}
+        <section>
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Datenschutz</h3>
+          <div class="flex flex-wrap gap-2">
+            <button id="settings-export" class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-semibold py-1.5 px-3 rounded transition">Daten exportieren</button>
+            <button id="settings-delete" class="bg-red-600 hover:bg-red-500 text-white text-sm font-semibold py-1.5 px-3 rounded transition">Konto löschen</button>
+          </div>
+          <div id="settings-delete-confirm" class="hidden mt-3 border border-red-800 rounded-lg p-3 bg-red-950/40">
+            <p class="text-xs text-red-300 mb-2">Achtung: Ihr Konto wird gelöscht. Journaleinträge bleiben erhalten. Bitte Passwort zur Bestätigung eingeben.</p>
+            <input id="settings-delete-password" type="password" placeholder="Passwort" class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-2" />
+            <div class="flex gap-2">
+              <button id="settings-delete-confirm-btn" class="bg-red-600 hover:bg-red-500 text-white text-sm font-semibold py-1.5 px-3 rounded transition">Endgültig löschen</button>
+              <button id="settings-delete-cancel" class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-semibold py-1.5 px-3 rounded transition">Abbrechen</button>
+            </div>
+          </div>
+        </section>
+        <section>
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Meine Templates</h3>
+          <div id="settings-templates-list" class="space-y-2 text-sm text-gray-300">
+            <p class="text-gray-500">Lade…</p>
+          </div>
+        </section>
+        <section>
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Brain</h3>
+          <div class="flex flex-wrap gap-2">
+            <button id="brain-rebuild" type="button" class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-semibold py-1.5 px-3 rounded transition">Index aktualisieren</button>
+            <button id="brain-tag-history" type="button" class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-semibold py-1.5 px-3 rounded transition">Hashtags nachtragen</button>
+            <button id="brain-tag-catalog" type="button" class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-semibold py-1.5 px-3 rounded transition">Hashtag-Katalog</button>
+          </div>
+          <div id="brain-tagging-controls" class="hidden mt-3 flex flex-wrap items-center gap-2 text-sm text-gray-400">
+            <label>Von <input id="brain-tag-start" type="date" class="rounded bg-gray-800 border border-gray-700 px-2 py-1 text-gray-100" /></label>
+            <label>Bis <input id="brain-tag-end" type="date" class="rounded bg-gray-800 border border-gray-700 px-2 py-1 text-gray-100" /></label>
+            <select id="brain-tag-provider" aria-label="Lokaler Anbieter" class="rounded bg-gray-800 border border-gray-700 px-2 py-1 text-gray-100"></select>
+            <button id="brain-tag-run" type="button" disabled class="rounded bg-green-700 px-3 py-1 text-white hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed">Starten</button>
+          </div>
+        </section>
+        <section class="border-t border-gray-800 pt-4">
+          <h3 class="text-sm font-semibold text-gray-300 mb-1">Über Journl</h3>
+          <p class="text-xs text-gray-500">Version <span id="settings-app-version">–</span></p>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  {% include '_planner_modal.html' %}
+
+  <!-- Unified editor modal (compact = Einkaufsliste, full = andere Templates) -->
+  <div id="editor-modal" class="fixed inset-0 z-50 hidden items-center justify-center px-4 bg-black/50">
+    <div class="w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-xl shadow-xl flex flex-col max-h-[90vh]">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800 shrink-0">
+        <h2 class="text-lg font-semibold text-gray-100" id="editor-title">📝 Bearbeiten</h2>
+        <button id="editor-close" class="text-gray-500 hover:text-white text-xl leading-none">×</button>
+      </div>
+      <div class="p-5 flex-1 overflow-y-auto flex flex-col gap-3">
+        <div id="editor-list" class="space-y-2"></div>
+        <div class="pt-3 border-t border-gray-800">
+          <label class="block text-xs text-gray-500 mb-1" id="editor-bulk-label">Mehrere Artikel hinzufügen (einer pro Zeile):</label>
+          <textarea id="editor-bulk" class="w-full h-24 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500 resize-none" placeholder="Butter&#10;Mehl&#10;Zucker"></textarea>
+        </div>
+        <div id="editor-comments-section" class="pt-3 border-t border-gray-800 hidden">
+          <label class="block text-xs text-gray-500 mb-1">Kommentare</label>
+          <div id="editor-comments-list" class="space-y-1 mb-2"></div>
+          <div class="flex gap-2">
+            <select id="editor-comment-user" class="rounded-lg bg-gray-800 border border-gray-700 px-2 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
+            <input type="text" id="editor-comment-text" class="flex-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Kommentar…" />
+            <button id="editor-comment-add" class="bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold py-2 px-3 rounded transition" title="Hinzufügen">+</button>
+          </div>
+        </div>
+      </div>
+      <div class="flex gap-2 px-5 py-3 border-t border-gray-800 shrink-0">
+        <button id="editor-save" class="bg-green-600 hover:bg-green-500 text-white text-sm font-semibold py-2 px-4 rounded transition">Speichern</button>
+        <button id="editor-cancel" class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-semibold py-2 px-4 rounded transition">Abbrechen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shopping list full-screen modal -->
+  <div id="shopping-modal" class="fixed inset-0 z-50 hidden flex-col {% if IS_DEV %}bg-red-950/95{% else %}bg-gray-950/95{% endif %}">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800 shrink-0">
+      <h2 class="text-lg font-semibold text-gray-100" id="shopping-title">🛒 Einkaufsliste</h2>
+      <button id="shopping-close" class="text-gray-500 hover:text-white text-xl leading-none">×</button>
+    </div>
+    <div id="shopping-container" class="flex-1 overflow-y-auto px-5 py-4 space-y-2 max-w-2xl w-full mx-auto"></div>
+  </div>
+
+  <!-- Toast notification -->
+  <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-green-600 text-white px-5 py-2.5 rounded-lg shadow-xl text-sm font-medium opacity-0 pointer-events-none transition-opacity duration-300 z-50">
+    Gespeichert! ✅
+  </div>
+
+  <script>
+    const AI_MODE_ID = '__ai_mode__';
+    let config = null;
+    let csrfToken = null;
+    let currentUser = null;
+    let currentUserId = null;
+    let familyNotificationTimer = null;
+
+    function templateVisibleForMe(t) {
+      if (!t) return false;
+      const au = t.assigned_users || [];
+      if (!au.length) return true;
+      return currentUserId && au.includes(currentUserId);
+    }
+
+    function dedupTemplates(arr) {
+      const map = new Map();
+      for (const t of arr) {
+        if (t && t.id && !map.has(t.id)) map.set(t.id, t);
+      }
+      return Array.from(map.values());
+    }
+
+    async function refreshCsrfToken() {
+      try {
+        const res = await fetch('/api/csrf-token', { credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          csrfToken = data.csrf_token;
+        }
+      } catch (err) {
+        console.error('CSRF fetch failed:', err);
+      }
+    }
+
+    async function apiFetch(url, opts = {}) {
+      opts.credentials = 'include';
+      opts.headers = opts.headers || {};
+      if (opts.body && !opts.headers['Content-Type']) {
+        opts.headers['Content-Type'] = 'application/json';
+      }
+      const method = (opts.method || 'GET').toUpperCase();
+      if (method !== 'GET' && csrfToken) {
+        opts.headers['X-CSRF-Token'] = csrfToken;
+      }
+      let res = await fetch(url, opts);
+      if (res.status === 403 && method !== 'GET') {
+        await refreshCsrfToken();
+        if (csrfToken) {
+          opts.headers['X-CSRF-Token'] = csrfToken;
+          res = await fetch(url, opts);
+        }
+      }
+      return res;
+    }
+
+    // ─── auth check on startup ───────────────────────────────────────
+    (async function checkAuth() {
+      try {
+        const res = await fetch('/api/health', { credentials: 'include' });
+        const data = await res.json();
+        if (data.authenticated) {
+          currentUser = data.username || null;
+          await refreshCsrfToken();
+          showApp();
+        } else {
+          showLogin();
+        }
+      } catch (err) {
+        showLogin();
+      }
+    })();
+
+    function showLogin() {
+      clearInterval(familyNotificationTimer);
+      familyNotificationTimer = null;
+      if (window.brainAuthenticatedUser && typeof window.clearBrainState === 'function') window.clearBrainState();
+      window.brainAuthenticatedUser = null;
+      document.getElementById('login-overlay').classList.remove('hidden');
+      document.getElementById('app').classList.add('hidden');
+    }
+
+    function showApp() {
+      const brainUserChanged = Boolean(currentUser && currentUser !== window.brainAuthenticatedUser);
+      if (brainUserChanged && typeof window.clearBrainState === 'function') window.clearBrainState();
+      window.brainAuthenticatedUser = currentUser || null;
+      document.getElementById('login-overlay').classList.add('hidden');
+      document.getElementById('app').classList.remove('hidden');
+      scheduleWritePanelClamp();
+      if (currentUser) {
+        const bu = document.getElementById('burger-username');
+        if (bu) bu.textContent = currentUser;
+        const headerUser = document.getElementById('header-username');
+        if (headerUser) headerUser.textContent = currentUser;
+      }
+      loadConfig();
+      checkFamilyNotifications();
+      clearInterval(familyNotificationTimer);
+      familyNotificationTimer = setInterval(checkFamilyNotifications, 60000);
+    }
+
+    // ─── login form ──────────────────────────────────────────────────
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+      const errEl = document.getElementById('login-error');
+      errEl.classList.add('hidden');
+
+      const res = await fetch('/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ username, password })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        try {
+          const hres = await fetch('/api/health', { credentials: 'include' });
+          const hdata = await hres.json();
+          if (!hres.ok || !hdata.authenticated) throw new Error('Session cookie was not accepted');
+          currentUser = hdata.username || username;
+          await refreshCsrfToken();
+          showApp();
+          if (data.notice) showToast(data.notice, false);
+        } catch {
+          currentUser = null;
+          errEl.textContent = 'Anmeldung fehlgeschlagen. Der Browser konnte keine Sitzung aufbauen.';
+          errEl.classList.remove('hidden');
+        }
+      } else if (res.status === 423) {
+        const data = await res.json().catch(() => ({}));
+        const until = data.locked_until ? new Date(data.locked_until).toLocaleTimeString('de-DE') : '';
+        errEl.textContent = 'Konto gesperrt. Bitte später erneut versuchen' + (until ? ' (bis ' + until + ' Uhr)' : '') + '.';
+        errEl.classList.remove('hidden');
+      } else if (res.status === 429) {
+        errEl.textContent = 'Zu viele Versuche. Bitte später erneut versuchen.';
+        errEl.classList.remove('hidden');
+      } else {
+        errEl.textContent = 'Falsche Zugangsdaten.';
+        errEl.classList.remove('hidden');
+      }
+      setTimeout(() => errEl.classList.add('hidden'), 4000);
+    });
+
+    // ─── burger menu (logout + settings) ─────────────────────────────
+    const burgerBtn = document.getElementById('burger-btn');
+    const burgerMenu = document.getElementById('burger-menu');
+    burgerBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      burgerMenu.classList.toggle('hidden');
+    });
+    document.addEventListener('click', (e) => {
+      if (!burgerMenu.contains(e.target) && !burgerBtn.contains(e.target)) {
+        burgerMenu.classList.add('hidden');
+      }
+    });
+    document.getElementById('burger-logout').addEventListener('click', async () => {
+      burgerMenu.classList.add('hidden');
+      if (typeof window.clearBrainState === 'function') window.clearBrainState();
+      window.brainAuthenticatedUser = null;
+      try { await apiFetch('/logout', { method: 'POST' }); } catch {}
+      csrfToken = null;
+      currentUser = null;
+      showLogin();
+    });
+
+    // ─── load config & build dropdown ────────────────────────────────
+    async function loadConfig() {
+      try {
+        const res = await apiFetch('/api/config');
+        if (!res.ok) { showLogin(); return; }
+        config = await res.json();
+        window.config = config;
+        applyYoutubeMode(Boolean(config.presentation?.youtube_mode));
+        document.getElementById('settings-app-version').textContent = config.app_version || '–';
+        if (config.current_user) currentUserId = config.current_user.id || null;
+        config.templates = dedupTemplates(config.templates || []);
+
+        // Build template dropdown
+        const select = document.getElementById('template-select');
+        for (const t of config.templates) {
+          if (!templateVisibleForMe(t)) continue;
+          const opt = document.createElement('option');
+          opt.value = t.id;
+          opt.textContent = t.label;
+          if (t.id === 'schnell') opt.selected = true;
+          select.appendChild(opt);
+        }
+        const aiModeOpt = document.createElement('option');
+        aiModeOpt.value = AI_MODE_ID;
+        aiModeOpt.textContent = '🤖 KI-Modus';
+        select.appendChild(aiModeOpt);
+
+        select.addEventListener('change', () => {
+          const val = select.value;
+          if (val === AI_MODE_ID) {
+            handleAiMode();
+          } else {
+            handleTemplateChange(config.templates.find(t => t.id === val));
+          }
+        });
+
+        // Type-ahead + Enter handling on template-select
+        select.addEventListener('keydown', (e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+            e.preventDefault();
+            handleSubmit();
+            return;
+          }
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            document.getElementById('simple-input').focus();
+            return;
+          }
+          if (e.key.length === 1) {
+            const letter = e.key.toLowerCase();
+            for (const opt of select.options) {
+              const label = opt.textContent.replace(/^[^a-zA-Z0-9äöüÄÖÜß]+/, '').trim().toLowerCase();
+              if (label.startsWith(letter)) {
+                if (select.value !== opt.value) {
+                  select.value = opt.value;
+                  select.dispatchEvent(new Event('change'));
+                }
+                e.preventDefault();
+                return;
+              }
+            }
+          }
+        });
+
+        // trigger initial state for schnell
+        handleTemplateChange(config.templates.find(t => t.id === 'schnell') || config.templates.find(templateVisibleForMe) || config.templates[0]);
+
+        // Build AI provider dropdown
+        const providerSelect = document.getElementById('ai-provider-select');
+        if (config.ai_providers && config.ai_providers.length > 0) {
+          for (const p of config.ai_providers) {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = p.label;
+            providerSelect.appendChild(opt);
+          }
+        }
+
+        // Historical tagging is intentionally restricted to local LM Studio providers.
+        const brainProviderSelect = document.getElementById('brain-tag-provider');
+        const brainRunButton = document.getElementById('brain-tag-run');
+        brainProviderSelect.replaceChildren();
+        brainProviderSelect.disabled = false;
+        const localProviders = (config.ai_providers || []).filter(p => String(p.id || '').startsWith('lm_'));
+        brainRunButton.disabled = localProviders.length === 0;
+        for (const p of localProviders) {
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          opt.textContent = p.label;
+          brainProviderSelect.appendChild(opt);
+        }
+        if (localProviders.length === 0) {
+          const opt = document.createElement('option');
+          opt.textContent = 'Kein lokaler Anbieter konfiguriert';
+          brainProviderSelect.appendChild(opt);
+          brainProviderSelect.disabled = true;
+        }
+
+        // Build AI function dropdown
+        const functionSelect = document.getElementById('ai-function-select');
+        if (config.ai_functions && config.ai_functions.length > 0) {
+          for (const f of config.ai_functions) {
+            const opt = document.createElement('option');
+            opt.value = f.id;
+            opt.textContent = f.label;
+            functionSelect.appendChild(opt);
+          }
+        }
+
+      } catch (err) {
+        console.error('Failed to load config:', err);
+      }
+    }
+
+    function renderForm(template, container) {
+      let html = '';
+      for (const field of template.fields) {
+        const required = field.required ? ' required' : '';
+        html += `<div class="form-field">`;
+        html += `<label for="field-${field.id}">${field.label}${field.required ? ' <span class="text-green-400">*</span>' : ''}</label>`;
+
+        if (field.type === 'text') {
+          html += `<input type="text" id="field-${field.id}" name="${field.id}" placeholder="${field.placeholder || ''}"${required} />`;
+        } else if (field.type === 'date') {
+          html += `<input type="date" id="field-${field.id}" name="${field.id}" placeholder="${field.placeholder || ''}"${required} />`;
+        } else if (field.type === 'user') {
+          const users = (config && config.users) || [];
+          let opts = '<option value="">— wählen —</option>';
+          for (const u of users) {
+            opts += `<option value="${escapeHtml(u.id)}">${escapeHtml(u.username)}</option>`;
+          }
+          html += `<select id="field-${field.id}" name="${field.id}"${required}>${opts}</select>`;
+        } else if (field.type === 'select') {
+          let opts = '<option value="">— wählen —</option>';
+          for (const option of (field.options || [])) {
+            opts += `<option value="${escapeHtmlAttr(option.value || '')}">${escapeHtml(option.label || option.value || '')}</option>`;
+          }
+          html += `<select id="field-${field.id}" name="${field.id}"${required}>${opts}</select>`;
+        } else if (field.type === 'textarea') {
+          html += `<textarea id="field-${field.id}" name="${field.id}" rows="3" placeholder="${field.placeholder || ''}"${required}></textarea>`;
+        } else if (field.type === 'number') {
+          const min = field.min !== undefined ? `min="${field.min}"` : '';
+          const max = field.max !== undefined ? `max="${field.max}"` : '';
+          html += `<input type="number" id="field-${field.id}" name="${field.id}" ${min} ${max} step="1" placeholder="${field.placeholder || ''}"${required} />`;
+        }
+
+        html += `</div>`;
+      }
+      container.innerHTML = html;
+      if (template.id === 'aufgabenplaner') {
+        const dateInput = document.getElementById('field-target_date');
+        const userInput = document.getElementById('field-user');
+        const recurrenceInput = document.getElementById('field-recurrence');
+        if (dateInput) dateInput.value = new Date().toLocaleDateString('sv-SE');
+        if (userInput && currentUserId) userInput.value = currentUserId;
+        if (recurrenceInput) recurrenceInput.value = 'once';
+      }
+      container.scrollTop = 0;
+    }
+
+    function renderProjectSelector(template) {
+      const container = document.getElementById('project-selector-container');
+      if (!container) return;
+      const previousValue = document.getElementById('project-assignment')?.value || '';
+      if (!template || !template.project_selector) {
+        container.innerHTML = '';
+        container.classList.add('hidden');
+        return;
+      }
+      const projects = typeof window.brainProjectOptions === 'function' ? window.brainProjectOptions() : [];
+      if (!projects.length && typeof window.loadBrainProjects === 'function') window.loadBrainProjects();
+      let options = '<option value="">Ohne Projekt</option>';
+      for (const project of projects) {
+        options += `<option value="${escapeHtmlAttr(project.path || '')}">${escapeHtml(project.title || project.path || '')}</option>`;
+      }
+      container.innerHTML = `<label class="block text-xs text-gray-400 mb-1" for="project-assignment">Projektzuordnung</label><select id="project-assignment" class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500">${options}</select>`;
+      const selector = document.getElementById('project-assignment');
+      if (selector && Array.from(selector.options).some(option => option.value === previousValue)) {
+        selector.value = previousValue;
+      }
+      container.classList.remove('hidden');
+    }
+    window.refreshBrainProjectSelector = () => {
+      const selectedId = document.getElementById('template-select')?.value;
+      if (config && selectedId) renderProjectSelector(config.templates.find(t => t.id === selectedId));
+    };
+
+    function handleAiMode() {
+      const simpleInput = document.getElementById('simple-input');
+      const formContainer = document.getElementById('form-container');
+      simpleInput.style.display = '';
+      formContainer.innerHTML = '';
+      formContainer.style.display = 'none';
+      document.getElementById('ai-controls').classList.remove('hidden');
+      document.getElementById('submit-btn').textContent = 'KI senden';
+      renderProjectSelector(null);
+      updateAppInfoBox();
+    }
+
+    function handleTemplateChange(template) {
+      const simpleInput = document.getElementById('simple-input');
+      const formContainer = document.getElementById('form-container');
+
+      if (!template || !simpleInput || !formContainer) return;
+
+      document.getElementById('ai-controls').classList.add('hidden');
+      document.getElementById('ai-response-area').classList.add('hidden');
+      document.getElementById('submit-btn').textContent = 'Senden';
+
+      if (template.type === 'simple') {
+        simpleInput.style.display = '';
+        formContainer.innerHTML = '';
+        formContainer.style.display = 'none';
+      } else {
+        simpleInput.style.display = 'none';
+        formContainer.style.display = '';
+        renderForm(template, formContainer);
+      }
+      renderProjectSelector(template);
+      updateAppInfoBox();
+    }
+
+    // ─── init journal before submit ──────────────────────────────────
+    async function initJournal() {
+      try {
+        await apiFetch('/api/dashboard/init', { method: 'POST' });
+      } catch (err) {
+        console.error('Failed to init journal:', err);
+      }
+    }
+
+    // ─── submit handler (normal or AI based on template selection) ──────
+    async function handleSubmit() {
+      const isAiMode = document.getElementById('template-select').value === AI_MODE_ID;
+
+      if (isAiMode) {
+        const providerId = document.getElementById('ai-provider-select').value;
+        const functionId = document.getElementById('ai-function-select').value;
+        const userMessage = document.getElementById('simple-input').value.trim();
+
+        if (!userMessage) {
+          showToast('Bitte Text eingeben', true);
+          return;
+        }
+        if (!providerId || !functionId) {
+          showToast('Bitte Provider und Funktion wählen', true);
+          return;
+        }
+
+        const submitBtn = document.getElementById('submit-btn');
+        const responseArea = document.getElementById('ai-response-area');
+
+        submitBtn.disabled = true;
+        submitBtn.textContent = '...';
+        submitBtn.classList.add('opacity-60', 'cursor-not-allowed');
+        responseArea.classList.remove('hidden');
+        responseArea.innerHTML = '<span class="text-blue-400 animate-pulse">KI wird abgefragt...</span>';
+
+        try {
+          const res = await apiFetch('/api/ai-submit', {
+            method: 'POST',
+            body: JSON.stringify({
+              ai_provider_id: providerId,
+              ai_function_id: functionId,
+              text: userMessage
+            })
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            const mode = data.mode || 'append';
+            const textarea = document.getElementById('simple-input');
+            if (mode === 'replace') {
+              textarea.value = data.response;
+            } else {
+              textarea.value = userMessage + '\n\n' + data.response;
+            }
+            responseArea.innerHTML = `<span class="text-blue-300 font-medium">KI-Antwort:</span>\n${escapeHtml(data.response)}`;
+            showToast('KI-Antwort verarbeitet ✅');
+            if (typeof window.refreshWriteHashtagCatalog === 'function') window.refreshWriteHashtagCatalog();
+          } else if (res.status === 409) {
+            const err = await res.json();
+            responseArea.innerHTML = `<span class="text-red-400">Fehler: ${escapeHtml(err.error)}</span>`;
+            showToast('Konflikt: ' + err.error, true);
+          } else {
+            let errText = 'Unbekannter Fehler';
+            const contentType = res.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+              try {
+                const err = await res.json();
+                errText = err.error || JSON.stringify(err);
+              } catch {}
+            } else {
+              try {
+                errText = (await res.text()).slice(0, 500).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+              } catch {}
+            }
+            responseArea.innerHTML = `<span class="text-red-400">Fehler: ${escapeHtml(errText)}</span>`;
+            showToast('KI-Fehler', true);
+          }
+        } catch (err) {
+          responseArea.innerHTML = `<span class="text-red-400">Netzwerkfehler: ${escapeHtml(err.message)}</span>`;
+          showToast('Netzwerkfehler', true);
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'KI senden';
+          submitBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+        }
+      } else {
+        // Normal template mode
+        const selectedId = document.getElementById('template-select').value;
+        if (!selectedId) return;
+
+        const template = config.templates.find(t => t.id === selectedId);
+        let payload = {};
+
+        if (template.type === 'simple') {
+          const content = document.getElementById('simple-input').value.trim();
+          if (!content && template.id !== 'schnell') {
+            showToast('Bitte Text eingeben', true);
+            return;
+          }
+          // For "schnell", allow empty (just time)
+          payload = { template_id: selectedId, content };
+        } else {
+          // form template - collect values
+          const values = {};
+          for (const field of template.fields) {
+            const el = document.getElementById('field-' + field.id);
+            if (field.required && (!el || !el.value.trim())) {
+              showToast('Bitte „' + field.label + '“ ausfüllen', true);
+              if (el) el.focus();
+              return;
+            }
+            if (el && el.value.trim()) {
+              values[field.id] = el.value.trim();
+            }
+          }
+          payload = { form_id: selectedId, values };
+        }
+
+        const projectAssignment = document.getElementById('project-assignment');
+        if (projectAssignment && projectAssignment.value) payload.project_assignment = projectAssignment.value;
+
+        if (template.write_to_journal !== false) await initJournal();
+
+        const submitBtn = document.getElementById('submit-btn');
+        const submitText = submitBtn.textContent;
+        submitBtn.disabled = true;
+        submitBtn.textContent = '...';
+        submitBtn.classList.add('opacity-60', 'cursor-not-allowed');
+        try {
+          const res = await apiFetch('/api/submit', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+          });
+
+          if (res.ok) {
+            showToast('Gespeichert! ✅');
+            if (typeof window.refreshWriteHashtagCatalog === 'function') window.refreshWriteHashtagCatalog();
+            if (!template.keep_template_after_submit) {
+              document.getElementById('template-select').value = 'schnell';
+              handleTemplateChange(config.templates.find(t => t.id === 'schnell'));
+            }
+            // keep template selected, clear only the input content with animation
+            if (template.type === 'simple') {
+              const textarea = document.getElementById('simple-input');
+              textarea.classList.add('wipe-out');
+              setTimeout(() => {
+                textarea.value = '';
+                textarea.classList.remove('wipe-out');
+                textarea.focus();
+              }, 350);
+            } else {
+              for (const field of template.fields) {
+                const el = document.getElementById('field-' + field.id);
+                if (el) {
+                  el.classList.add('wipe-out');
+                  setTimeout(() => {
+                    el.value = '';
+                    el.classList.remove('wipe-out');
+                  }, 350);
+                }
+              }
+              const firstField = document.getElementById('field-' + template.fields[0].id);
+              if (firstField) setTimeout(() => firstField.focus(), 400);
+            }
+          } else if (res.status === 409) {
+            const err = await res.json();
+            showToast('Konflikt: ' + err.error, true);
+          } else {
+            const err = await res.json();
+            showToast(err.error || 'Speichern fehlgeschlagen', true);
+          }
+        } catch (err) {
+          showToast('Netzwerkfehler', true);
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = submitText;
+          submitBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+        }
+      }
+    }
+
+    function showToast(msg, isError) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.className = `fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-2.5 rounded-lg shadow-xl text-sm font-medium opacity-0 pointer-events-none transition-opacity duration-300 z-50 ${isError ? 'bg-red-600' : 'bg-green-600'} text-white`;
+      toast.classList.remove('opacity-0', 'pointer-events-none');
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'pointer-events-none');
+      }, 2000);
+    }
+
+    function applyYoutubeMode(enabled) {
+      document.documentElement.classList.toggle('youtube-mode', Boolean(enabled));
+      document.getElementById('youtube-mode-banner')?.classList.toggle('hidden', !enabled);
+      const toggle = document.getElementById('settings-youtube-mode');
+      if (toggle) toggle.checked = Boolean(enabled);
+    }
+
+    // ─── tab switching ───────────────────────────────────────────────
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active', 'border-green-400', 'text-green-400');
+        btn.classList.add('border-transparent', 'text-gray-500');
+      });
+
+      const tab = document.getElementById('tab-' + tabId);
+      tab.classList.remove('hidden');
+
+      const btn = document.getElementById('tab-btn-' + tabId);
+      btn.classList.add('active', 'border-green-400', 'text-green-400');
+      btn.classList.remove('border-transparent', 'text-gray-500');
+
+      if (tabId === 'dashboard') loadDashboard();
+      if (tabId === 'family') { loadFamily(); visitFamily(); }
+      if (tabId === 'brain' && typeof window.openBrainTab === 'function') window.openBrainTab();
+    }
+
+    // ─── dashboard ───────────────────────────────────────────────────
+    async function loadDashboard() {
+      const container = document.getElementById('dashboard-container');
+      container.innerHTML = '<p class="text-gray-500 text-center mt-8">Lade Einträge…</p>';
+
+      try {
+        // Load family tag metadata before rendering private entries.
+        if (typeof window.loadFamilyHashtags === 'function') await window.loadFamilyHashtags();
+        // Initialize journal file first (ensures fresh state from disk)
+        await initJournal();
+
+        const res = await apiFetch('/api/dashboard/refresh');
+        if (res.status === 401) { showLogin(); return; }
+        const entries = await res.json();
+
+        let html = `<div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-semibold text-gray-300">Heutige Einträge</h2>
+          <button onclick="loadDashboard()" class="text-green-500 hover:text-green-400 transition flex items-center gap-1.5 text-sm">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+            Aktualisieren
+          </button>
+        </div>`;
+
+        if (!entries.length) {
+          html += '<p class="text-gray-500 text-center mt-8">Keine Einträge für heute gefunden.</p>';
+        } else {
+          entries.forEach((entry, idx) => {
+            const editId = simpleHash(entry.content) + '-' + idx;
+            const contentAttr = escapeHtmlAttr(entry.content);
+            html += `
+              <div class="bg-gray-900 rounded-xl p-4 border border-gray-800" id="entry-${editId}" data-content="${contentAttr}" data-filename="${escapeHtmlAttr(entry.file)}">
+                <div class="text-xs text-gray-600 mb-2 font-mono flex items-center justify-between">
+                  <span>${entry.file}</span>
+                  <div class="flex items-center gap-1">
+                    <button onclick="toggleEdit('${editId}')" class="text-green-500 hover:text-green-400 transition">✏️</button>
+                    <button onclick="deleteEntry('${editId}')" class="text-red-500 hover:text-red-400 transition">🗑️</button>
+                  </div>
+                </div>
+                <div class="text-gray-200 whitespace-pre-wrap text-sm leading-relaxed">${typeof window.renderJournalText === 'function' ? window.renderJournalText(entry.content) : escapeHtml(entry.content)}</div>
+                <textarea class="edit-area hidden mt-3 w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" rows="6" id="edit-${editId}">${escapeHtml(entry.content)}</textarea>
+                <div class="edit-actions hidden mt-2 flex gap-2">
+                  <button onclick="saveEdit('${editId}')" class="bg-green-600 hover:bg-green-500 text-white text-xs py-1.5 px-3 rounded transition">Speichern</button>
+                  <button onclick="toggleEdit('${editId}')" class="bg-gray-700 hover:bg-gray-600 text-white text-xs py-1.5 px-3 rounded transition">Abbrechen</button>
+                </div>
+              </div>`;
+          });
+        }
+
+        container.innerHTML = html;
+      } catch (err) {
+        container.innerHTML += `<p class="text-red-400 text-center mt-8">Fehler beim Laden: ${err.message}</p>`;
+      }
+    }
+
+    function escapeHtml(text) {
+      if (typeof text !== 'string') return String(text);
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function escapeHtmlAttr(text) {
+      if (typeof text !== 'string') return String(text);
+      return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function simpleHash(str) {
+      let h = 0;
+      for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        h = ((h << 5) - h) + char;
+        h = h & h; // Convert to 32-bit integer
+      }
+      return Math.abs(h).toString(16);
+    }
+
+    function toggleEdit(editId) {
+      const entry = document.getElementById('entry-' + editId);
+      const textarea = document.getElementById('edit-' + editId);
+      const actions = entry.querySelector('.edit-actions');
+      const markdown = entry.querySelector('.text-gray-200.whitespace-pre-wrap');
+
+      if (textarea.classList.contains('hidden')) {
+        textarea.classList.remove('hidden');
+        actions.classList.remove('hidden');
+        markdown.classList.add('hidden');
+      } else {
+        textarea.classList.add('hidden');
+        actions.classList.add('hidden');
+        markdown.classList.remove('hidden');
+      }
+    }
+
+    async function saveEdit(editId) {
+      const entry = document.getElementById('entry-' + editId);
+      const textarea = document.getElementById('edit-' + editId);
+      const markdown = entry.querySelector('.text-gray-200.whitespace-pre-wrap');
+      const oldContent = entry.dataset.content;
+      const newContent = textarea.value;
+      const filename = entry.dataset.filename;
+
+      try {
+        const res = await apiFetch('/api/dashboard/edit', {
+          method: 'POST',
+          body: JSON.stringify({ content: oldContent, new_content: newContent, filename })
+        });
+
+        if (res.ok) {
+          markdown.innerHTML = typeof window.renderJournalText === 'function' ? window.renderJournalText(newContent) : escapeHtml(newContent);
+          markdown.classList.remove('hidden');
+          textarea.classList.add('hidden');
+          entry.querySelector('.edit-actions').classList.add('hidden');
+          entry.dataset.content = newContent;
+          showToast('Eintrag aktualisiert ✅');
+        } else if (res.status === 404) {
+          const err = await res.json();
+          showToast('Eintrag wurde extern geändert. Seite neu laden: ' + JSON.stringify(err), true);
+          setTimeout(() => location.reload(), 2000);
+        } else {
+          const err = await res.json();
+          showToast('Fehler: ' + JSON.stringify(err), true);
+        }
+      } catch (err) {
+        showToast('Netzwerkfehler', true);
+      }
+    }
+
+    async function deleteEntry(editId) {
+      const entry = document.getElementById('entry-' + editId);
+      const content = entry.dataset.content;
+      const filename = entry.dataset.filename;
+      if (!content || !confirm('Eintrag wirklich löschen?')) return;
+
+      try {
+        const res = await apiFetch('/api/dashboard/delete', {
+          method: 'POST',
+          body: JSON.stringify({ content, filename })
+        });
+
+        if (res.ok) {
+          const entry = document.getElementById('entry-' + editId);
+          entry.classList.add('wipe-out');
+          setTimeout(() => {
+            entry.remove();
+            const remaining = document.querySelectorAll('#dashboard-container > div.bg-gray-900');
+            if (remaining.length === 0) {
+              document.getElementById('dashboard-container').innerHTML = '<p class="text-gray-500 text-center mt-8">Keine Einträge für heute gefunden.</p>';
+            }
+          }, 350);
+          showToast('Eintrag gelöscht 🗑️');
+        } else if (res.status === 409) {
+          const err = await res.json();
+          showToast('Eintrag wurde extern geändert. Seite neu laden: ' + JSON.stringify(err), true);
+          setTimeout(() => location.reload(), 2000);
+        } else {
+          const err = await res.json();
+          showToast('Fehler: ' + JSON.stringify(err), true);
+        }
+      } catch (err) {
+        showToast('Netzwerkfehler', true);
+      }
+    }
+
+    // Shared reference for the desktop resize logic below.
+    const inputArea = document.getElementById('input-area');
+
+    // ─── keyboard shortcut: Cmd/Ctrl+Enter to submit ────────────────
+    document.getElementById('simple-input').addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        handleSubmit();
+      }
+    });
+    document.getElementById('form-container').addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        handleSubmit();
+      }
+    });
+
+    // start on write tab
+    switchTab('write');
+
+    // ─── init app info box ────────────────────────────────────────
+    const appInfoBox = document.getElementById('app-info-box');
+    function updateAppInfoBox() {
+      if (!appInfoBox) return;
+      const isAiMode = document.getElementById('template-select').value === AI_MODE_ID;
+      if (isAiMode) {
+        appInfoBox.textContent = 'KI-Modus aktiv: Text eingeben und "KI senden" klicken oder Cmd+Enter drücken.';
+      } else {
+        appInfoBox.textContent = 'Text eingeben und "Senden" klicken oder Cmd+Enter drücken.';
+      }
+    }
+    updateAppInfoBox();
+
+    // ─── settings modal ─────────────────────────────────────────────
+    const settingsModal = document.getElementById('settings-modal');
+    const settingsClose = document.getElementById('settings-close');
+
+    function openSettings() {
+      settingsModal.classList.remove('hidden');
+      settingsModal.classList.add('flex');
+      loadProfile();
+      loadDevices();
+      loadSettingsTemplates();
+      const youtubeToggle = document.getElementById('settings-youtube-mode');
+      if (youtubeToggle && !youtubeToggle.dataset.bound) {
+        youtubeToggle.dataset.bound = 'true';
+        youtubeToggle.addEventListener('change', async () => {
+          const res = await apiFetch('/api/settings/youtube-mode', { method: 'POST', body: JSON.stringify({ enabled: youtubeToggle.checked }) });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) { youtubeToggle.checked = !youtubeToggle.checked; showToast(data.error || 'YouTube-Mode konnte nicht geändert werden.', true); return; }
+          applyYoutubeMode(data.enabled);
+        });
+      }
+    }
+    function closeSettings() {
+      settingsModal.classList.add('hidden');
+      settingsModal.classList.remove('flex');
+    }
+    window.closeSettings = closeSettings;
+    settingsClose.addEventListener('click', closeSettings);
+    settingsModal.addEventListener('click', (e) => { if (e.target === settingsModal) closeSettings(); });
+    document.getElementById('burger-settings').addEventListener('click', () => {
+      burgerMenu.classList.add('hidden');
+      openSettings();
+    });
+
+    async function loadProfile() {
+      try {
+        const res = await apiFetch('/api/settings/profile');
+        if (!res.ok) return;
+        const data = await res.json();
+        currentUser = data.username || currentUser;
+        document.getElementById('settings-current-username').textContent = currentUser || '–';
+        document.getElementById('settings-new-username').value = '';
+        const bu = document.getElementById('burger-username');
+        if (bu) bu.textContent = currentUser || 'Bürger';
+        const headerUser = document.getElementById('header-username');
+        if (headerUser) headerUser.textContent = currentUser || '';
+      } catch (e) {
+        console.error('load profile failed:', e);
+      }
+    }
+
+    async function loadDevices() {
+      const list = document.getElementById('settings-devices-list');
+      list.innerHTML = '<p class="text-gray-500">Lade…</p>';
+      try {
+        const res = await apiFetch('/api/settings/devices');
+        if (!res.ok) { list.innerHTML = '<p class="text-gray-500">Nicht verfügbar.</p>'; return; }
+        const data = await res.json();
+        const devices = data.devices || [];
+        if (!devices.length) { list.innerHTML = '<p class="text-gray-500">Keine vertrauten Geräte.</p>'; return; }
+        list.innerHTML = '';
+        devices.forEach(d => {
+          const fp = d.fingerprint || '';
+          const short = fp.slice(0, 12);
+          const row = document.createElement('div');
+          row.className = 'flex items-center justify-between bg-gray-800 border border-gray-700 rounded-lg px-3 py-2';
+          row.innerHTML = `
+            <div class="min-w-0">
+              <div class="font-mono text-xs text-gray-300 truncate">${escapeHtml(short)}…</div>
+              <div class="text-xs text-gray-500">Hinzugefügt: ${escapeHtml(d.added_at || '–')} · Ablauf: ${escapeHtml(d.expires_at || '–')}</div>
+            </div>
+            <button class="bg-gray-700 hover:bg-red-600 text-white text-xs py-1 px-2 rounded transition ml-2 shrink-0">Widerrufen</button>`;
+          row.querySelector('button').addEventListener('click', async () => {
+            if (!confirm('Gerät widerrufen?')) return;
+            const r = await apiFetch('/api/settings/devices/revoke', { method: 'POST', body: JSON.stringify({ fingerprint: fp }) });
+            if (r.ok) { showToast('Gerät widerrufen ✅'); loadDevices(); }
+            else { const e = await r.json().catch(() => ({})); showToast('Fehler: ' + (e.error || r.status), true); }
+          });
+          list.appendChild(row);
+        });
+      } catch (e) {
+        list.innerHTML = '<p class="text-gray-500">Fehler beim Laden.</p>';
+      }
+    }
+
+    document.getElementById('settings-save-username').addEventListener('click', async () => {
+      const val = document.getElementById('settings-new-username').value.trim();
+      if (!val) { showToast('Benutzername eingeben', true); return; }
+      const res = await apiFetch('/api/settings/profile', { method: 'POST', body: JSON.stringify({ username: val }) });
+      if (res.ok) { const data = await res.json(); currentUser = data.username || val; showToast('Benutzername gespeichert ✅'); loadProfile(); }
+      else if (res.status === 409) { const e = await res.json().catch(() => ({})); showToast('Vergeben: ' + (e.error || ''), true); }
+      else { const e = await res.json().catch(() => ({})); showToast('Fehler: ' + (e.error || res.status), true); }
+    });
+
+    document.getElementById('settings-change-password').addEventListener('click', async () => {
+      const oldP = document.getElementById('settings-old-password').value;
+      const newP = document.getElementById('settings-new-password').value;
+      const conf = document.getElementById('settings-confirm-password').value;
+      if (!oldP || !newP || !conf) { showToast('Alle Felder ausfüllen', true); return; }
+      if (newP !== conf) { showToast('Passwörter stimmen nicht überein', true); return; }
+      if (newP.length < 8 || !/[A-Z]/.test(newP) || !/[a-z]/.test(newP) || !/[0-9]/.test(newP) || !/[^A-Za-z0-9]/.test(newP)) {
+        showToast('Passwort erfüllt Regeln nicht (min. 8, Groß-/Klein, Ziffer, Sonderzeichen)', true);
+        return;
+      }
+      const res = await apiFetch('/api/settings/password', { method: 'POST', body: JSON.stringify({ old_password: oldP, new_password: newP }) });
+      if (res.ok) {
+        showToast('Passwort geändert ✅');
+        document.getElementById('settings-old-password').value = '';
+        document.getElementById('settings-new-password').value = '';
+        document.getElementById('settings-confirm-password').value = '';
+      } else {
+        const e = await res.json().catch(() => ({}));
+        showToast('Fehler: ' + (e.error || res.status), true);
+      }
+    });
+
+    document.getElementById('settings-export').addEventListener('click', async () => {
+      try {
+        const res = await apiFetch('/api/me/export');
+        if (!res.ok) { showToast('Export fehlgeschlagen', true); return; }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'journl-export.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        showToast('Export heruntergeladen ✅');
+      } catch (e) {
+        showToast('Export fehlgeschlagen', true);
+      }
+    });
+
+    document.getElementById('settings-delete').addEventListener('click', () => {
+      document.getElementById('settings-delete-confirm').classList.remove('hidden');
+    });
+    document.getElementById('settings-delete-cancel').addEventListener('click', () => {
+      document.getElementById('settings-delete-confirm').classList.add('hidden');
+      document.getElementById('settings-delete-password').value = '';
+    });
+    document.getElementById('settings-delete-confirm-btn').addEventListener('click', async () => {
+      const pw = document.getElementById('settings-delete-password').value;
+      if (!pw) { showToast('Passwort eingeben', true); return; }
+      const res = await apiFetch('/api/me/delete', { method: 'POST', body: JSON.stringify({ password: pw }) });
+      if (res.ok) {
+        showToast('Konto gelöscht ✅');
+        if (typeof window.clearBrainState === 'function') window.clearBrainState();
+        window.brainAuthenticatedUser = null;
+        csrfToken = null;
+        currentUser = null;
+        closeSettings();
+        showLogin();
+      } else {
+        const e = await res.json().catch(() => ({}));
+        showToast('Fehler: ' + (e.error || res.status), true);
+      }
+    });
+
+    // ─── family tracker ─────────────────────────────────────────────
+    let familyData = [];
+    const familyExpandedProjects = new Set();
+
+    async function loadFamily() {
+      const container = document.getElementById('family-container');
+      if (!container) return;
+      container.innerHTML = '<p class="text-gray-500 text-center mt-8">Lade…</p>';
+      try {
+        const res = await apiFetch('/api/family/projects');
+        if (res.status === 401) { showLogin(); return; }
+        if (!res.ok) { container.innerHTML = '<p class="text-red-400 text-center mt-8">Fehler beim Laden.</p>'; return; }
+        const data = await res.json();
+        familyData = data.projects || [];
+        renderFamily();
+      } catch (err) {
+        container.innerHTML = `<p class="text-red-400 text-center mt-8">Fehler: ${escapeHtml(err.message)}</p>`;
+      }
+    }
+
+    function renderFamily() {
+      const container = document.getElementById('family-container');
+      if (!container) return;
+      const q = (document.getElementById('family-search')?.value || '').trim().toLowerCase();
+      let projects = familyData;
+      if (q) {
+        projects = projects.filter(p => {
+          if (p.title && p.title.toLowerCase().includes(q)) return true;
+          for (const t of (p.tasks || [])) {
+            if (t.title && t.title.toLowerCase().includes(q)) return true;
+            if (t.user_display && t.user_display.toLowerCase().includes(q)) return true;
+          }
+          for (const c of (p.comments || [])) {
+            if (c.text && c.text.toLowerCase().includes(q)) return true;
+          }
+          return false;
+        });
+      }
+      if (!projects.length) {
+        container.innerHTML = '<p class="text-gray-500 text-center mt-8">Noch keine Family-Projekte vorhanden.</p>';
+        return;
+      }
+      let html = '';
+      for (const p of projects) {
+        const isShopping = p.template_id === 'einkaufsliste' || (p.target_file || '').endsWith('einkaufsliste.md');
+        const isRecurring = p.id === 'wiederkehrende-aufgaben';
+        const projectTitle = isShopping
+          ? `<button type="button" onclick="openShopping('${escapeHtmlAttr(p.id)}')" class="text-left text-sm font-semibold text-gray-200 hover:text-green-400">${escapeHtml(p.title || '')}</button>`
+          : `<h3 class="text-sm font-semibold text-gray-200">${escapeHtml(p.title || '')}</h3>`;
+        html += `<div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
+          <div class="flex items-center justify-between mb-3">
+            ${projectTitle}
+            <div class="flex items-center gap-2">
+              ${isRecurring
+                ? '<button type="button" onclick="openPlanner()" class="text-green-500 hover:text-green-400 text-xs">Pläne verwalten</button>'
+                : `<button type="button" onclick="openEditor('${escapeHtmlAttr(p.id)}','${isShopping ? 'compact' : 'full'}')" class="text-green-500 hover:text-green-400 text-xs" title="Bearbeiten">✏️</button>`}
+              ${isShopping && config && config.shopping_ai && config.shopping_ai.ai_provider_id ? `<button onclick="aiShoppingSuggest('${escapeHtmlAttr(p.id)}', this)" class="text-purple-400 hover:text-purple-300 text-xs" title="AI Liste sortieren">🤖</button>` : ''}
+            </div>
+          </div>
+          <div class="space-y-1.5">`;
+        const tasks = [...(p.tasks || [])].sort((a, b) => {
+          if (Boolean(a.completed) !== Boolean(b.completed)) return a.completed ? 1 : -1;
+          return (a.target_date || '9999-12-31').localeCompare(b.target_date || '9999-12-31');
+        });
+        if (!tasks.length) html += '<p class="text-gray-600 text-xs">Keine Aufgaben.</p>';
+        const MAX_TASKS = 5;
+        const expanded = familyExpandedProjects.has(p.id);
+        const shown = expanded ? tasks : tasks.slice(0, MAX_TASKS);
+        const today = new Date().toLocaleDateString('sv-SE');
+        let lastGruppe = '__none__';
+        const cardGruppeEmojis = { 'Obst & Gemüse': '🟢', 'Kühlung': '🔵', 'Tiefkühlung': '❄️', 'Non-Food': '🟡', 'Konserven': '🟠', 'Süßigkeiten': '🟣', 'Sonstiges': '⚪' };
+        for (const t of shown) {
+          const gruppe = t.gruppe || '';
+          if (gruppe && gruppe !== lastGruppe) {
+            const emoji = cardGruppeEmojis[gruppe] || '▸';
+            html += `<div class="text-xs font-semibold text-gray-500 pt-1">${emoji} ${escapeHtml(gruppe)}</div>`;
+            lastGruppe = gruppe;
+          } else if (!gruppe && lastGruppe !== '__none__') {
+            lastGruppe = '__none__';
+          }
+          const checked = t.completed ? 'checked' : '';
+          const strike = t.completed ? 'line-through text-gray-500' : 'text-gray-200';
+          const dateClass = !t.completed && t.target_date && t.target_date <= today ? 'text-red-400' : 'text-gray-600';
+          const dateStr = t.target_date ? ` · ${escapeHtml(t.target_date)}` : '';
+          const userStr = t.user_display ? ` · 👤 ${escapeHtml(t.user_display)}` : '';
+          const recurrenceStr = t.source === 'recurring' ? ` · ${escapeHtml(t.recurrence_label || 'Wiederkehrend')}` : '';
+          html += `<label class="flex items-start gap-2 text-sm ${strike}">
+            <input type="checkbox" ${checked} onchange="checkFamilyTask('${escapeHtmlAttr(p.id)}','${escapeHtmlAttr(t.id)}',this)" class="mt-0.5 accent-green-500 disabled:opacity-60" />
+            <span class="flex-1">${escapeHtml(t.title || '')}<span class="${dateClass} text-xs">${dateStr}${userStr}${recurrenceStr}</span></span>
+          </label>`;
+        }
+        if (tasks.length > MAX_TASKS) {
+          html += `<button type="button" onclick="toggleFamilyProject('${escapeHtmlAttr(p.id)}')" class="text-xs text-green-500 hover:text-green-400 mt-1">${expanded ? 'Weniger anzeigen' : `+${tasks.length - MAX_TASKS} weitere anzeigen`}</button>`;
+        }
+        html += `</div></div>`;
+      }
+      container.innerHTML = html;
+    }
+
+    function toggleFamilyProject(projectId) {
+      if (familyExpandedProjects.has(projectId)) familyExpandedProjects.delete(projectId);
+      else familyExpandedProjects.add(projectId);
+      renderFamily();
+    }
+
+    async function checkFamilyTask(projectId, taskId, checkbox) {
+      checkbox.disabled = true;
+      try {
+        const res = await apiFetch('/api/family/task/check', {
+          method: 'POST',
+          body: JSON.stringify({ project_id: projectId, task_id: taskId, completed: checkbox.checked })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          for (const project of familyData) {
+            const task = (project.tasks || []).find(item => item.id === taskId);
+            if (task) {
+              task.completed = checkbox.checked;
+              task.completed_at = data.completed_at || null;
+              task.completed_by = data.completed_by || null;
+            }
+          }
+          renderFamily();
+          if (data.already_completed) showToast('Bereits erledigt');
+          else showToast('Erledigt ✅');
+          checkFamilyNotifications();
+        } else {
+          const error = await res.json().catch(() => ({}));
+          checkbox.checked = !checkbox.checked;
+          checkbox.disabled = false;
+          showToast(error.error || 'Fehler beim Abhaken', true);
+        }
+      } catch {
+        checkbox.checked = !checkbox.checked;
+        checkbox.disabled = false;
+        showToast('Netzwerkfehler', true);
+      }
+    }
+
+    function setFamilyNotify(blue, red) {
+      const el = document.getElementById('family-notify');
+      if (!el) return;
+      if (red) {
+        el.style.backgroundColor = '#ef4444';
+        el.classList.remove('hidden');
+      } else if (blue) {
+        el.style.backgroundColor = '#2563eb';
+        el.classList.remove('hidden');
+      } else {
+        el.classList.add('hidden');
+      }
+    }
+
+    async function checkFamilyNotifications() {
+      try {
+        const res = await apiFetch('/api/family/notifications');
+        if (!res.ok) return;
+        const data = await res.json();
+        setFamilyNotify(data.blue, data.red);
+      } catch {}
+    }
+
+    async function visitFamily() {
+      try { await apiFetch('/api/family/visit', { method: 'POST' }); } catch {}
+      checkFamilyNotifications();
+    }
+
+    // ─── shopping full-screen modal ──────────────────────────────────
+    async function openShopping(projectId) {
+      const modal = document.getElementById('shopping-modal');
+      const container = document.getElementById('shopping-container');
+      const title = document.getElementById('shopping-title');
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+      container.innerHTML = '<p class="text-gray-500">Lade…</p>';
+      try {
+        const res = await apiFetch('/api/family/project/' + projectId);
+        if (!res.ok) { container.innerHTML = '<p class="text-red-400">Fehler</p>'; return; }
+        const p = await res.json();
+        title.textContent = '🛒 ' + (p.title || 'Einkaufsliste');
+        const tasks = p.tasks || [];
+        if (!tasks.length) { container.innerHTML = '<p class="text-gray-500 text-center mt-8">Noch keine Items.</p>'; return; }
+        let html = '';
+        let lastGruppe = '__none__';
+        const gruppeEmojis = {
+          'Obst & Gemüse': '🟢', 'Kühlung': '🔵', 'Tiefkühlung': '❄️',
+          'Non-Food': '🟡', 'Konserven': '🟠', 'Süßigkeiten': '🟣', 'Sonstiges': '⚪',
+        };
+        for (const t of tasks) {
+          const gruppe = t.gruppe || '';
+          if (gruppe && gruppe !== lastGruppe) {
+            const emoji = gruppeEmojis[gruppe] || '▸';
+            html += `<div class="text-sm font-semibold text-gray-400 mt-4 mb-1 first:mt-0">${emoji} ${escapeHtml(gruppe)}</div>`;
+            lastGruppe = gruppe;
+          } else if (!gruppe && lastGruppe !== '__none__') {
+            lastGruppe = '__none__';
+          }
+          const checked = t.completed ? 'checked' : '';
+          const strike = t.completed ? 'line-through text-gray-500' : 'text-gray-100';
+          html += `<label class="flex items-center gap-3 text-lg ${strike} bg-gray-900 border border-gray-800 rounded-lg px-4 py-3">
+            <input type="checkbox" ${checked} onchange="checkShoppingTask('${escapeHtmlAttr(projectId)}','${escapeHtmlAttr(t.id)}',this)" class="w-5 h-5 accent-green-500 disabled:opacity-60" />
+            <span class="flex-1">${escapeHtml(t.title || '')}</span>
+          </label>`;
+        }
+        container.innerHTML = html;
+      } catch {
+        container.innerHTML = '<p class="text-red-400">Netzwerkfehler</p>';
+      }
+    }
+
+    function closeShopping() {
+      const modal = document.getElementById('shopping-modal');
+      if (!modal) return;
+      const wasOpen = !modal.classList.contains('hidden');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+      if (wasOpen) loadFamily();
+    }
+
+    async function checkShoppingTask(projectId, taskId, checkbox) {
+      const label = checkbox.closest('label');
+      checkbox.disabled = true;
+      try {
+        const res = await apiFetch('/api/family/task/check', {
+          method: 'POST',
+          body: JSON.stringify({ project_id: projectId, task_id: taskId, completed: checkbox.checked })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          label.classList.toggle('line-through', checkbox.checked);
+          label.classList.toggle('text-gray-500', checkbox.checked);
+          label.classList.toggle('text-gray-100', !checkbox.checked);
+          checkbox.disabled = false;
+          if (!data.already_completed) showToast(checkbox.checked ? 'Abgehakt ✅' : 'Wieder geöffnet');
+        } else {
+          checkbox.checked = !checkbox.checked;
+          checkbox.disabled = false;
+          showToast('Fehler', true);
+        }
+      } catch {
+        checkbox.checked = !checkbox.checked;
+        checkbox.disabled = false;
+        showToast('Netzwerkfehler', true);
+      }
+    }
+
+    async function aiShoppingSuggest(projectId, btn) {
+      if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+      try {
+        const res = await apiFetch('/api/family/project/' + projectId + '/ai-suggest', {
+          method: 'POST',
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast('🤖 ' + (data.sorted_count || 0) + '/' + (data.total_count || 0) + ' Artikel sortiert');
+          loadFamily();
+        } else {
+          showToast('🤖 ' + (data.error || 'Fehler'), true);
+        }
+      } catch {
+        showToast('🤖 Netzwerkfehler', true);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '🤖'; }
+      }
+    }
+
+    // ─── unified editor modal (compact + full) ─────────────────────
+    let editorState = { projectId: null, mode: 'full', users: [], deletedCommentIds: [] };
+
+    async function openEditor(projectId, mode) {
+      editorState.projectId = projectId;
+      editorState.mode = mode || 'full';
+      editorState.deletedCommentIds = [];
+      const modal = document.getElementById('editor-modal');
+      const listEl = document.getElementById('editor-list');
+      const bulkEl = document.getElementById('editor-bulk');
+      const commentsSection = document.getElementById('editor-comments-section');
+      const bulkLabel = document.getElementById('editor-bulk-label');
+      const titleEl = document.getElementById('editor-title');
+      const p = familyData.find(x => x.id === projectId);
+      titleEl.textContent = (mode === 'compact' ? '🛒 ' : '📝 ') + (p ? (p.title || 'Editor') : 'Editor') + ' bearbeiten';
+      if (mode === 'compact') {
+        bulkLabel.textContent = 'Mehrere Artikel hinzufügen (einer pro Zeile):';
+      } else {
+        bulkLabel.textContent = 'Mehrere Aufgaben hinzufügen (einer pro Zeile):';
+      }
+      commentsSection.classList.toggle('hidden', mode === 'compact');
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+      listEl.innerHTML = '<p class="text-gray-500">Lade…</p>';
+      bulkEl.value = '';
+      document.getElementById('editor-comment-text').value = '';
+      try {
+        const res = await apiFetch('/api/family/project/' + projectId + '/editor');
+        if (!res.ok) { listEl.innerHTML = '<p class="text-red-400">Fehler</p>'; return; }
+        const data = await res.json();
+        editorState.users = data.users || [];
+        renderEditorItems(data.tasks || [], data.mode || mode);
+        renderEditorComments(data.comments || []);
+        renderEditorCommentUserSelect();
+      } catch {
+        listEl.innerHTML = '<p class="text-red-400">Netzwerkfehler</p>';
+      }
+    }
+
+    function renderEditorItems(tasks, mode) {
+      const listEl = document.getElementById('editor-list');
+      if (!tasks.length) {
+        listEl.innerHTML = '<p class="text-gray-600 text-sm">Noch keine Einträge.</p>';
+        return;
+      }
+      let html = '';
+      for (const it of tasks) {
+        const checked = it.completed ? 'checked' : '';
+        const strike = it.completed ? 'line-through text-gray-500' : 'text-gray-100';
+        if (mode === 'compact') {
+          html += `<div class="flex items-center gap-2" data-item-id="${escapeHtmlAttr(it.id || '')}">
+            <input type="checkbox" ${checked} class="editor-check w-5 h-5 accent-green-500 shrink-0" />
+            <input type="text" value="${escapeHtmlAttr(it.title || '')}" class="editor-input flex-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm ${strike} focus:outline-none focus:ring-2 focus:ring-green-500" />
+            <button onclick="this.parentElement.remove()" class="text-red-500 hover:text-red-400 text-sm shrink-0" title="Löschen">🗑️</button>
+          </div>`;
+        } else {
+          let userOpts = '<option value="">—</option>';
+          for (const u of editorState.users) {
+            const sel = (u.id === it.user) ? ' selected' : '';
+            userOpts += `<option value="${escapeHtmlAttr(u.id)}"${sel}>${escapeHtml(u.display)}</option>`;
+          }
+          html += `<div class="flex flex-wrap items-center gap-2" data-item-id="${escapeHtmlAttr(it.id || '')}">
+            <input type="checkbox" ${checked} class="editor-check w-5 h-5 accent-green-500 shrink-0" />
+            <input type="text" value="${escapeHtmlAttr(it.title || '')}" class="editor-input flex-1 min-w-[8rem] rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm ${strike} focus:outline-none focus:ring-2 focus:ring-green-500" />
+            <select class="editor-user rounded-lg bg-gray-800 border border-gray-700 px-2 py-2 text-xs text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500">${userOpts}</select>
+            <input type="date" value="${escapeHtmlAttr(it.target_date || '')}" class="editor-date rounded-lg bg-gray-800 border border-gray-700 px-2 py-2 text-xs text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500" />
+            <button onclick="this.parentElement.remove()" class="text-red-500 hover:text-red-400 text-sm shrink-0" title="Löschen">🗑️</button>
+          </div>`;
+        }
+      }
+      listEl.innerHTML = html;
+      listEl.querySelectorAll('.editor-check').forEach(cb => {
+        cb.addEventListener('change', () => {
+          const input = cb.parentElement.querySelector('.editor-input');
+          if (cb.checked) {
+            input.classList.add('line-through', 'text-gray-500');
+            input.classList.remove('text-gray-100');
+          } else {
+            input.classList.remove('line-through', 'text-gray-500');
+            input.classList.add('text-gray-100');
+          }
+        });
+      });
+    }
+
+    function renderEditorComments(comments) {
+      const listEl = document.getElementById('editor-comments-list');
+      if (!comments.length) {
+        listEl.innerHTML = '<p class="text-gray-600 text-xs">Keine Kommentare.</p>';
+        return;
+      }
+      let html = '';
+      for (const c of comments) {
+        html += `<div class="flex items-start gap-2 text-sm text-gray-200" data-comment-id="${escapeHtmlAttr(c.id || '')}">
+          <span class="flex-1"><span class="text-gray-400 text-xs">👤 ${escapeHtml(c.user_display || c.user || '?')} · ${escapeHtml(c.created_at || '')}</span><br>${escapeHtml(c.text || '')}</span>
+          <button onclick="editorDeleteComment('${escapeHtmlAttr(c.id)}', this)" class="text-red-500 hover:text-red-400 text-xs shrink-0" title="Löschen">🗑️</button>
+        </div>`;
+      }
+      listEl.innerHTML = html;
+    }
+
+    function renderEditorCommentUserSelect() {
+      const sel = document.getElementById('editor-comment-user');
+      let html = '<option value="">—</option>';
+      for (const u of editorState.users) {
+        html += `<option value="${escapeHtmlAttr(u.id)}">${escapeHtml(u.display)}</option>`;
+      }
+      sel.innerHTML = html;
+    }
+
+    function editorDeleteComment(commentId, btn) {
+      if (!commentId) return;
+      editorState.deletedCommentIds.push(commentId);
+      btn.parentElement.remove();
+    }
+
+    function editorAddComment() {
+      const textEl = document.getElementById('editor-comment-text');
+      const userEl = document.getElementById('editor-comment-user');
+      const text = textEl.value.trim();
+      const userId = userEl.value;
+      if (!text) return;
+      const listEl = document.getElementById('editor-comments-list');
+      if (listEl.querySelector('p') && listEl.querySelector('p').textContent.includes('Keine Kommentare')) {
+        listEl.innerHTML = '';
+      }
+      const userDisplay = (editorState.users.find(u => u.id === userId) || {}).display || '—';
+      const row = document.createElement('div');
+      row.className = 'flex items-start gap-2 text-sm text-gray-200';
+      row.setAttribute('data-new-comment', '1');
+      row.innerHTML = `<span class="flex-1"><span class="text-gray-400 text-xs">👤 ${escapeHtml(userDisplay)} · jetzt</span><br>${escapeHtml(text)}</span>
+        <button class="text-red-500 hover:text-red-400 text-xs shrink-0" title="Löschen">🗑️</button>`;
+      row.querySelector('button').addEventListener('click', () => row.remove());
+      row.setAttribute('data-comment-user', userId);
+      row.setAttribute('data-comment-text', text);
+      listEl.appendChild(row);
+      textEl.value = '';
+    }
+
+    function closeEditor() {
+      const modal = document.getElementById('editor-modal');
+      if (!modal) return;
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+      editorState.projectId = null;
+      editorState.deletedCommentIds = [];
+    }
+
+    async function saveEditor() {
+      if (!editorState.projectId) return;
+      const listEl = document.getElementById('editor-list');
+      const bulkEl = document.getElementById('editor-bulk');
+      const tasks = [];
+      listEl.querySelectorAll('[data-item-id]').forEach(row => {
+        const title = row.querySelector('.editor-input').value.trim();
+        if (!title) return;
+        const task = {
+          id: row.getAttribute('data-item-id') || undefined,
+          title: title,
+          completed: row.querySelector('.editor-check').checked
+        };
+        if (editorState.mode === 'full') {
+          const userSel = row.querySelector('.editor-user');
+          const dateInput = row.querySelector('.editor-date');
+          task.user = userSel ? userSel.value : '';
+          task.target_date = dateInput ? dateInput.value : '';
+        }
+        tasks.push(task);
+      });
+      for (const line of bulkEl.value.split('\n')) {
+        const t = line.trim();
+        if (t && !tasks.some(i => i.title.toLowerCase() === t.toLowerCase())) {
+          const task = { title: t, completed: false };
+          if (editorState.mode === 'full') {
+            task.user = '';
+            task.target_date = '';
+          }
+          tasks.push(task);
+        }
+      }
+      const comments = [];
+      document.querySelectorAll('#editor-comments-list [data-new-comment]').forEach(row => {
+        const text = row.getAttribute('data-comment-text') || '';
+        const user = row.getAttribute('data-comment-user') || '';
+        if (text) comments.push({ user, text });
+      });
+      try {
+        const res = await apiFetch('/api/family/project/' + editorState.projectId + '/editor', {
+          method: 'PUT',
+          body: JSON.stringify({ tasks, comments, deleted_comment_ids: editorState.deletedCommentIds })
+        });
+        if (res.ok) {
+          showToast('Gespeichert ✅');
+          closeEditor();
+          loadFamily();
+          checkFamilyNotifications();
+        } else {
+          const e = await res.json().catch(() => ({}));
+          showToast('Fehler: ' + (e.error || res.status), true);
+        }
+      } catch {
+        showToast('Netzwerkfehler', true);
+      }
+    }
+
+    document.getElementById('editor-close').addEventListener('click', closeEditor);
+    document.getElementById('editor-cancel').addEventListener('click', closeEditor);
+    document.getElementById('editor-save').addEventListener('click', saveEditor);
+    document.getElementById('editor-comment-add').addEventListener('click', editorAddComment);
+    document.getElementById('editor-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'editor-modal') closeEditor();
+    });
+    document.getElementById('shopping-close').addEventListener('click', closeShopping);
+
+    document.getElementById('family-search').addEventListener('input', renderFamily);
+
+    // ─── settings: my templates ──────────────────────────────────────
+    function loadSettingsTemplates() {
+      const list = document.getElementById('settings-templates-list');
+      if (!list) return;
+      list.innerHTML = '';
+      if (!config || !config.templates) {
+        list.innerHTML = '<p class="text-gray-500">Keine Templates.</p>';
+        return;
+      }
+      let any = false;
+      for (const t of config.templates) {
+        if (!templateVisibleForMe(t)) continue;
+        const au = t.assigned_users || [];
+        let badge, badgeColor;
+        if (!au.length) { badge = 'Gemeinsam'; badgeColor = 'text-blue-400'; }
+        else { badge = 'Zugewiesen: ' + au.join(', '); badgeColor = 'text-amber-400'; }
+        const row = document.createElement('div');
+        row.className = 'flex items-center justify-between bg-gray-800 border border-gray-700 rounded-lg px-3 py-2';
+        row.innerHTML = `<div class="min-w-0"><div class="text-sm text-gray-200">${escapeHtml(t.label || t.id)}</div><div class="text-xs ${badgeColor}">${escapeHtml(badge)}</div></div>`;
+        list.appendChild(row);
+        any = true;
+      }
+      if (!any) list.innerHTML = '<p class="text-gray-500">Keine Templates.</p>';
+    }
+
+    // ─── ESC handler ─────────────────────────────────────────────────
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeShopping();
+        closeEditor();
+        closeSettings();
+        if (burgerMenu) burgerMenu.classList.add('hidden');
+      }
+    });
+
+    // ─── clock (server time via API) ──────────────────────────────
+    async function updateClock() {
+      try {
+        const res = await apiFetch('/api/time');
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('clock').textContent = data.time;
+          return;
+        }
+      } catch {
+        // ignore
+      }
+      // Fallback to local time
+      const now = new Date();
+      const h = String(now.getHours()).padStart(2, '0');
+      const m = String(now.getMinutes()).padStart(2, '0');
+      document.getElementById('clock').textContent = `${h}:${m}`;
+    }
+    updateClock();
+    setInterval(updateClock, 60000);
+
+    // ─── centered desktop input-panel resizing ──────────────────────
+    const WRITE_PANEL_STORAGE_KEY = 'journl.desktop.write-panel-size.v1';
+    const WRITE_PANEL_MIN_HEIGHT = 160;
+    const writePanelHandles = Array.from(document.querySelectorAll('.input-resize-handle'));
+    let desiredWritePanelSize = readStoredWritePanelSize();
+    let renderedWritePanelSize = { width: null, height: null };
+    let activeWritePanelResize = null;
+    let writePanelResizeFrame = 0;
+
+    function isValidPanelDimension(value) {
+      return typeof value === 'number' && Number.isFinite(value) && value > 0;
+    }
+
+    function readStoredWritePanelSize() {
+      try {
+        const raw = localStorage.getItem(WRITE_PANEL_STORAGE_KEY);
+        if (!raw) return { width: null, height: null };
+        const stored = JSON.parse(raw);
+        return {
+          width: isValidPanelDimension(stored && stored.width) ? stored.width : null,
+          height: isValidPanelDimension(stored && stored.height) ? stored.height : null,
+        };
+      } catch {
+        return { width: null, height: null };
+      }
+    }
+
+    function persistDesiredWritePanelSize() {
+      if (!isValidPanelDimension(desiredWritePanelSize.width) || !isValidPanelDimension(desiredWritePanelSize.height)) return;
+      try {
+        localStorage.setItem(WRITE_PANEL_STORAGE_KEY, JSON.stringify(desiredWritePanelSize));
+      } catch {
+        // Resizing still works when storage is blocked or full.
+      }
+    }
+
+    function clampPanelDimension(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function getWritePanelBounds() {
+      const app = document.getElementById('app');
+      const writeTab = document.getElementById('tab-write');
+      const main = document.querySelector('main');
+      if (!inputArea || !app || !writeTab || !main || app.classList.contains('hidden')) return null;
+
+      const visualViewport = window.visualViewport;
+      const viewportWidth = visualViewport && isValidPanelDimension(visualViewport.width)
+        ? visualViewport.width
+        : window.innerWidth;
+      const viewportHeight = visualViewport && isValidPanelDimension(visualViewport.height)
+        ? visualViewport.height
+        : window.innerHeight;
+      const viewportLeft = visualViewport && Number.isFinite(visualViewport.offsetLeft)
+        ? visualViewport.offsetLeft
+        : 0;
+      const viewportTop = visualViewport && Number.isFinite(visualViewport.offsetTop)
+        ? visualViewport.offsetTop
+        : 0;
+      const boundsElement = writeTab.clientWidth > 0 && writeTab.clientHeight > 0 ? writeTab : main;
+      const boundsRect = boundsElement.getBoundingClientRect();
+      let availableWidth = boundsElement.clientWidth || boundsRect.width || viewportWidth;
+      let availableHeight = boundsElement.clientHeight || boundsRect.height || viewportHeight;
+
+      if (visualViewport) {
+        const visibleLeft = Math.max(boundsRect.left, viewportLeft);
+        const visibleRight = Math.min(boundsRect.right, viewportLeft + viewportWidth);
+        const visibleTop = Math.max(boundsRect.top, viewportTop);
+        const visibleBottom = Math.min(boundsRect.bottom, viewportTop + viewportHeight);
+        const visibleWidth = Math.max(0, visibleRight - visibleLeft);
+        const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+        const centerX = boundsRect.left + (boundsRect.width / 2);
+        const centeredHalfWidth = Math.min(centerX - visibleLeft, visibleRight - centerX);
+
+        availableWidth = Math.min(
+          availableWidth,
+          centeredHalfWidth > 0 ? centeredHalfWidth * 2 : (visibleWidth || viewportWidth)
+        );
+        availableHeight = Math.min(availableHeight, visibleHeight || viewportHeight);
+      }
+
+      availableWidth = Math.max(1, Math.floor(availableWidth));
+      availableHeight = Math.max(1, Math.floor(availableHeight));
+
+      const sideMargin = Math.min(24, Math.max(8, availableWidth * 0.02));
+      const maxWidth = Math.max(1, availableWidth - (sideMargin * 2));
+      const minWidth = Math.min(280, maxWidth);
+      const defaultWidth = clampPanelDimension(availableWidth - 100, minWidth, maxWidth);
+
+      const controlsReserve = Math.min(140, Math.max(64, availableHeight * 0.2));
+      const preferredMaxHeight = Math.min(
+        availableHeight - controlsReserve,
+        viewportHeight * 0.75
+      );
+      // On very short viewports the panel deliberately overflows the scrollable
+      // Write tab so the editor keeps usable space above the 50px handle row.
+      const minHeight = WRITE_PANEL_MIN_HEIGHT;
+      const maxHeight = Math.max(minHeight, Math.round(preferredMaxHeight));
+      const defaultHeight = clampPanelDimension(availableHeight * 0.35, minHeight, maxHeight);
+
+      return { minWidth, maxWidth, minHeight, maxHeight, defaultWidth, defaultHeight };
+    }
+
+    function renderWritePanelSize(width, height) {
+      const bounds = getWritePanelBounds();
+      if (!bounds) return null;
+
+      const nextWidth = isValidPanelDimension(width) ? width : bounds.defaultWidth;
+      const nextHeight = isValidPanelDimension(height) ? height : bounds.defaultHeight;
+      renderedWritePanelSize = {
+        width: Math.round(clampPanelDimension(nextWidth, bounds.minWidth, bounds.maxWidth)),
+        height: Math.round(clampPanelDimension(nextHeight, bounds.minHeight, bounds.maxHeight)),
+      };
+      inputArea.style.width = renderedWritePanelSize.width + 'px';
+      inputArea.style.height = renderedWritePanelSize.height + 'px';
+      return renderedWritePanelSize;
+    }
+
+    function renderDesiredWritePanelSize() {
+      return renderWritePanelSize(desiredWritePanelSize.width, desiredWritePanelSize.height);
+    }
+
+    function commitRenderedWritePanelSize(changedWidth, changedHeight) {
+      if (!changedWidth && !changedHeight) return;
+      if (!isValidPanelDimension(renderedWritePanelSize.width) || !isValidPanelDimension(renderedWritePanelSize.height)) return;
+
+      desiredWritePanelSize = {
+        width: changedWidth || !isValidPanelDimension(desiredWritePanelSize.width)
+          ? renderedWritePanelSize.width
+          : desiredWritePanelSize.width,
+        height: changedHeight || !isValidPanelDimension(desiredWritePanelSize.height)
+          ? renderedWritePanelSize.height
+          : desiredWritePanelSize.height,
+      };
+      persistDesiredWritePanelSize();
+    }
+
+    function scheduleWritePanelClamp() {
+      if (writePanelResizeFrame) cancelAnimationFrame(writePanelResizeFrame);
+      writePanelResizeFrame = requestAnimationFrame(() => {
+        writePanelResizeFrame = 0;
+        renderDesiredWritePanelSize();
+      });
+    }
+
+    function finishWritePanelResize(event) {
+      if (!activeWritePanelResize) return;
+      if (event && event.pointerId !== undefined && event.pointerId !== activeWritePanelResize.pointerId) return;
+
+      const resize = activeWritePanelResize;
+      activeWritePanelResize = null;
+      resize.handle.classList.remove('dragging');
+      inputArea.classList.remove('resizing');
+      document.body.style.userSelect = resize.previousUserSelect;
+      document.body.style.cursor = resize.previousCursor;
+      try {
+        if (resize.handle.hasPointerCapture(resize.pointerId)) {
+          resize.handle.releasePointerCapture(resize.pointerId);
+        }
+      } catch {
+        // Capture can already be gone after pointercancel or window blur.
+      }
+
+      if (event && event.type === 'pointerup') {
+        commitRenderedWritePanelSize(resize.changedWidth, resize.changedHeight);
+      } else {
+        renderDesiredWritePanelSize();
+      }
+    }
+
+    function startWritePanelResize(event) {
+      if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
+      event.preventDefault();
+      finishWritePanelResize();
+
+      const handle = event.currentTarget;
+      const rect = inputArea.getBoundingClientRect();
+      activeWritePanelResize = {
+        handle,
+        pointerId: event.pointerId,
+        axis: handle.dataset.resizeAxis,
+        startX: event.clientX,
+        startY: event.clientY,
+        startWidth: rect.width,
+        startHeight: rect.height,
+        changedWidth: false,
+        changedHeight: false,
+        previousUserSelect: document.body.style.userSelect,
+        previousCursor: document.body.style.cursor,
+      };
+
+      try {
+        handle.setPointerCapture(event.pointerId);
+      } catch {
+        finishWritePanelResize();
+        return;
+      }
+      handle.classList.add('dragging');
+      inputArea.classList.add('resizing');
+      document.body.style.userSelect = 'none';
+      document.body.style.cursor = getComputedStyle(handle).cursor;
+    }
+
+    function moveWritePanelResize(event) {
+      const resize = activeWritePanelResize;
+      if (!resize || event.pointerId !== resize.pointerId) return;
+      event.preventDefault();
+
+      let width = resize.startWidth;
+      let height = resize.startHeight;
+      if (resize.axis.includes('x')) {
+        // X and XY sit on the right; doubling the delta moves both centered edges
+        // symmetrically while the right edge follows the pointer distance.
+        width += (event.clientX - resize.startX) * 2;
+      }
+      if (resize.axis.includes('y')) height += event.clientY - resize.startY;
+      const renderedSize = renderWritePanelSize(width, height);
+      if (!renderedSize) return;
+      resize.changedWidth = resize.axis.includes('x') && renderedSize.width !== Math.round(resize.startWidth);
+      resize.changedHeight = resize.axis.includes('y') && renderedSize.height !== Math.round(resize.startHeight);
+    }
+
+    function resizeWritePanelWithKeyboard(event) {
+      const axis = event.currentTarget.dataset.resizeAxis;
+      const step = event.shiftKey ? 40 : 12;
+      const currentSize = isValidPanelDimension(renderedWritePanelSize.width)
+        && isValidPanelDimension(renderedWritePanelSize.height)
+        ? renderedWritePanelSize
+        : renderDesiredWritePanelSize();
+      if (!currentSize) return;
+
+      let width = currentSize.width;
+      let height = currentSize.height;
+      let changesWidth = false;
+      let changesHeight = false;
+
+      if (axis.includes('x') && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        width += event.key === 'ArrowRight' ? step : -step;
+        changesWidth = true;
+      }
+      if (axis.includes('y') && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        height += event.key === 'ArrowDown' ? step : -step;
+        changesHeight = true;
+      }
+      if (!changesWidth && !changesHeight) return;
+      event.preventDefault();
+      const renderedSize = renderWritePanelSize(width, height);
+      if (!renderedSize) return;
+      commitRenderedWritePanelSize(
+        changesWidth && renderedSize.width !== currentSize.width,
+        changesHeight && renderedSize.height !== currentSize.height
+      );
+    }
+
+    writePanelHandles.forEach(handle => {
+      handle.addEventListener('pointerdown', startWritePanelResize);
+      handle.addEventListener('pointermove', moveWritePanelResize);
+      handle.addEventListener('pointerup', finishWritePanelResize);
+      handle.addEventListener('pointercancel', finishWritePanelResize);
+      handle.addEventListener('lostpointercapture', finishWritePanelResize);
+      handle.addEventListener('keydown', resizeWritePanelWithKeyboard);
+    });
+
+    function handleWritePanelViewportResize() {
+      finishWritePanelResize();
+      scheduleWritePanelClamp();
+    }
+
+    window.addEventListener('blur', finishWritePanelResize);
+    window.addEventListener('resize', handleWritePanelViewportResize);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', handleWritePanelViewportResize);
+      window.visualViewport.addEventListener('scroll', handleWritePanelViewportResize);
+    }
+    scheduleWritePanelClamp();
+  </script>
+  <script src="{{ url_for('static', filename='planner.js') }}"></script>
+  <script src="{{ url_for('static', filename='journal-highlighting.js', v='20260808-4') }}"></script>
+  <script src="{{ url_for('static', filename='brain.js', v='20260808-9') }}"></script>
+  <script src="{{ url_for('static', filename='write-hashtags.js', v='20260808-3') }}"></script>
+  <script src="{{ url_for('static', filename='write-ai.js', v='20260808-1') }}"></script>
+</body>
+</html>

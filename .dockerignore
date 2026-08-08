@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.env.*
+.opencode
+**/__pycache__
+**/*.py[cod]
+**/.DS_Store
+**/.ruff_cache
+FeatureRequest_Archiv
+Screenshots
+tests
+*.md
+deploy_JTracker_Opencode-Docker_int.sh

@@ -1,0 +1,41 @@
+name: journaling-tracker
+
+services:
+  journaling-tracker:
+    build: .
+    image: journaling-tracker:latest
+    container_name: journaling-tracker
+    restart: unless-stopped
+    ports:
+      - "${PORT:-4097}:4098"
+    env_file:
+      - .env
+    volumes:
+      - ${JOURNAL_DATA_DIR:-/path/to/journal-data/}:/app/data
+    environment:
+      - TZ=Europe/Berlin
+      - DATA_DIR=/app/data
+      - ENVIRONMENT=prod
+    user: "1000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4098/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  family-scheduler:
+    build: .
+    image: journaling-tracker:latest
+    container_name: journaling-tracker-scheduler
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ${JOURNAL_DATA_DIR:-/path/to/journal-data/}:/app/data
+    environment:
+      - TZ=Europe/Berlin
+      - DATA_DIR=/app/data
+      - ENVIRONMENT=prod
+    user: "1000"
+    command: ["python", "/app/scripts/scheduler.py", "--loop"]

@@ -1,0 +1,72 @@
+<div id="planner-modal" class="fixed inset-0 z-50 hidden items-end sm:items-center justify-center bg-black/70 sm:px-4" role="dialog" aria-modal="true" aria-labelledby="planner-title">
+  <div class="planner-panel w-full min-w-0 max-w-full sm:max-w-3xl bg-gray-900 border border-gray-800 rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col max-h-[94vh] max-h-[94dvh]">
+    <div class="flex items-start justify-between gap-4 min-w-0 px-5 py-4 border-b border-gray-800 shrink-0">
+      <div class="min-w-0">
+        <h2 id="planner-title" class="text-lg font-semibold text-gray-100 break-words">Aufgabenplanung</h2>
+        <p class="text-xs text-gray-500 mt-0.5 break-words">Einmalige und wiederkehrende Aufgaben zentral verwalten.</p>
+      </div>
+      <button id="planner-close" type="button" class="text-gray-500 hover:text-white text-2xl leading-none shrink-0" aria-label="Planung schließen">×</button>
+    </div>
+
+    <div class="flex-1 min-h-0 min-w-0 overflow-y-auto p-4 sm:p-5 space-y-6">
+      <form id="planner-form" class="min-w-0 max-w-full bg-gray-950/50 border border-gray-800 rounded-xl p-4 space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-3 min-w-0">
+          <div class="min-w-0">
+            <h3 id="planner-form-title" class="text-sm font-semibold text-gray-200">Neue Aufgabe planen</h3>
+            <p class="text-xs text-gray-500 mt-0.5 break-words">Der nächste Termin wird sofort als Aufgabe angelegt, sobald er fällig ist.</p>
+          </div>
+          <button id="planner-form-reset" type="button" class="hidden text-xs text-gray-400 hover:text-white">Abbrechen</button>
+        </div>
+
+        <div>
+          <label for="planner-task-title" class="block text-xs font-medium text-gray-400 mb-1.5">Was ist zu tun?</label>
+          <input id="planner-task-title" type="text" maxlength="200" required autocomplete="off" placeholder="z. B. Mülltonne rausstellen"
+            class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2.5 text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500" />
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 min-w-0">
+          <div class="min-w-0">
+            <label for="planner-user" class="block text-xs font-medium text-gray-400 mb-1.5">Verantwortlich</label>
+            <select id="planner-user" required class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2.5 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500"></select>
+          </div>
+          <div class="min-w-0">
+            <label for="planner-recurrence" class="block text-xs font-medium text-gray-400 mb-1.5">Wiederholung</label>
+            <select id="planner-recurrence" required class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2.5 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500"></select>
+          </div>
+          <div class="min-w-0">
+            <label for="planner-start-date" class="block text-xs font-medium text-gray-400 mb-1.5">Start ab</label>
+            <input id="planner-start-date" type="date" required class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2.5 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500" />
+          </div>
+        </div>
+
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+          <div class="flex flex-wrap items-center gap-3 min-w-0">
+            <label class="inline-flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+              <input id="planner-active" type="checkbox" checked class="accent-green-500" />
+              Plan aktiv
+            </label>
+            <span id="planner-preview" class="text-xs text-green-400 break-words"></span>
+          </div>
+          <button id="planner-save" type="submit" class="bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold py-2.5 px-4 rounded-lg transition">
+            Plan speichern
+          </button>
+        </div>
+      </form>
+
+      <section>
+        <div class="flex flex-wrap items-center justify-between gap-3 min-w-0 mb-3">
+          <div class="min-w-0">
+            <h3 class="text-sm font-semibold text-gray-200">Gespeicherte Pläne <span id="planner-count" class="text-gray-500 font-normal"></span></h3>
+            <p id="planner-status" class="text-xs text-gray-500 mt-0.5"></p>
+          </div>
+          <button id="planner-run" type="button" class="border border-gray-700 hover:border-gray-600 hover:bg-gray-800 text-gray-300 text-xs font-medium py-2 px-3 rounded-lg transition">
+            Jetzt prüfen
+          </button>
+        </div>
+        <div id="planner-list" class="space-y-2 min-w-0 max-w-full">
+          <p class="text-gray-500 text-sm text-center py-6">Lade Pläne…</p>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>

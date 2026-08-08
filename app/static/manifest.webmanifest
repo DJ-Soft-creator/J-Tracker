@@ -1,0 +1,25 @@
+{
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "name": "Journl",
+  "short_name": "Journl",
+  "lang": "de",
+  "display": "standalone",
+  "theme_color": "#030712",
+  "background_color": "#030712",
+  "icons": [
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

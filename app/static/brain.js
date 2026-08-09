@@ -465,16 +465,26 @@ function knowledgePathOptions(options, scope, selected = '') {
 }
 
 
+function knowledgeKindOptions(selected = 'reference') {
+  const labels = { reference: 'Referenz', constraints: 'Rahmenbedingungen', glossary: 'Glossar', examples: 'Beispiele' };
+  return Object.entries(labels).map(([value, label]) => `<option value="${value}"${value === selected ? ' selected' : ''}>${label}</option>`).join('');
+}
+
+
 function knowledgeSourcesSection(sources, options, canManagePersonal, canManageFamily) {
   const renderScope = (scope, entries, canManage) => Object.entries(entries || {}).map(([tag, source]) => {
     const path = source.path || '';
-    const controls = canManage ? `<div class="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]"><select data-knowledge-path class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 font-mono text-xs text-gray-100">${knowledgePathOptions(options, scope, path)}</select><div class="flex gap-2"><button type="button" data-knowledge-save class="text-xs text-green-400 hover:text-green-300">Speichern</button><button type="button" data-knowledge-remove class="text-xs text-red-400 hover:text-red-300">Entfernen</button></div></div>` : '';
-    return `<article data-knowledge-source-card data-tag="${escapeHtmlAttr(tag)}" data-scope="${scope}" class="rounded border border-violet-900/60 bg-violet-950/20 p-3"><div class="flex flex-wrap items-center justify-between gap-2"><strong class="text-sm text-violet-200">#${escapeHtml(tag)}</strong><span class="font-mono text-xs text-gray-400">${escapeHtml(scope)}:${escapeHtml(path)}</span></div>${controls}</article>`;
+    const kind = source.kind || 'reference';
+    const description = source.description || '';
+    const controls = canManage ? `<div class="mt-2 grid gap-2"><div class="grid gap-2 sm:grid-cols-2"><select data-knowledge-path class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 font-mono text-xs text-gray-100">${knowledgePathOptions(options, scope, path)}</select><select data-knowledge-kind class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-xs text-gray-100">${knowledgeKindOptions(kind)}</select></div><input data-knowledge-description maxlength="240" value="${escapeHtmlAttr(description)}" placeholder="Zweck für Pi, optional" class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-xs text-gray-100" /><div class="flex gap-2"><button type="button" data-knowledge-save class="text-xs text-green-400 hover:text-green-300">Speichern</button><button type="button" data-knowledge-remove class="text-xs text-red-400 hover:text-red-300">Entfernen</button></div></div>` : '';
+    const sourceInfo = `${scope}:${path} · ${kind}`;
+    const descriptionInfo = description ? `<p class="mt-1 text-xs text-gray-500">${escapeHtml(description)}</p>` : '';
+    return `<article data-knowledge-source-card data-tag="${escapeHtmlAttr(tag)}" data-scope="${scope}" class="rounded border border-violet-900/60 bg-violet-950/20 p-3"><div class="flex flex-wrap items-center justify-between gap-2"><strong class="text-sm text-violet-200">#${escapeHtml(tag)}</strong><span class="font-mono text-xs text-gray-400">${escapeHtml(sourceInfo)}</span></div>${descriptionInfo}${controls}</article>`;
   }).join('') || '<p class="text-sm text-gray-600">Keine Quellen.</p>';
   const scopes = `<option value="personal">Persönlich</option>${canManageFamily ? '<option value="family">Family</option>' : ''}`;
   const hasOptions = (options || []).length > 0;
-  const add = canManagePersonal ? `<form data-knowledge-add class="grid gap-2 pt-2 sm:grid-cols-[minmax(9rem,1fr)_minmax(10rem,1fr)_minmax(14rem,2fr)_auto]"><input data-knowledge-tag required maxlength="80" placeholder="hashtag ohne #" class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-sm text-gray-100" /><select data-knowledge-scope class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-sm text-gray-100">${scopes}</select><select data-knowledge-path class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 font-mono text-xs text-gray-100"></select><button ${hasOptions ? '' : 'disabled'} class="rounded bg-violet-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-50">Quelle hinzufügen</button></form>${hasOptions ? '' : '<p class="text-xs text-amber-300">Lege zuerst eine persönliche oder sichtbare Family-Notiz bzw. ein Projekt im Brain an.</p>'}` : '';
-  return `<section class="bg-gray-900 border border-violet-900/60 rounded-xl p-4 space-y-3"><div><h3 class="font-medium text-violet-200">Knowledge-Quellen</h3><p class="text-xs text-gray-500">Nur diese ausdrücklich zugeordneten Tags werden bei „KI Senden“ als einmaliger Kontext-Snapshot übergeben.</p></div><div class="space-y-2"><p class="text-xs text-gray-500">Persönlich</p>${renderScope('personal', sources.personal, canManagePersonal)}<p class="pt-1 text-xs text-gray-500">Family</p>${renderScope('family', sources.family, canManageFamily)}</div>${add}</section>`;
+  const add = canManagePersonal ? `<form data-knowledge-add class="grid gap-2 pt-2"><div class="grid gap-2 sm:grid-cols-4"><input data-knowledge-tag required maxlength="80" placeholder="hashtag ohne #" class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-sm text-gray-100" /><select data-knowledge-scope class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-sm text-gray-100">${scopes}</select><select data-knowledge-kind class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-sm text-gray-100">${knowledgeKindOptions()}</select><select data-knowledge-path class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 font-mono text-xs text-gray-100"></select></div><div class="flex flex-wrap gap-2"><input data-knowledge-description maxlength="240" placeholder="Zweck für Pi, optional" class="min-w-56 flex-1 rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-sm text-gray-100" /><button ${hasOptions ? '' : 'disabled'} class="rounded bg-violet-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-50">Quelle hinzufügen</button></div></form>${hasOptions ? '' : '<p class="text-xs text-amber-300">Lege zuerst eine persönliche oder sichtbare Family-Notiz bzw. ein Projekt im Brain an.</p>'}` : '';
+  return `<section class="bg-gray-900 border border-violet-900/60 rounded-xl p-4 space-y-3"><div><h3 class="font-medium text-violet-200">Knowledge-Quellen</h3><p class="text-xs text-gray-500">Nur diese ausdrücklich zugeordneten Tags werden bei „KI Senden“ als einmaliger Kontext-Snapshot als Referenzmaterial übergeben; sie sind keine Pi-Anweisungen.</p></div><div class="space-y-2"><p class="text-xs text-gray-500">Persönlich</p>${renderScope('personal', sources.personal, canManagePersonal)}<p class="pt-1 text-xs text-gray-500">Family</p>${renderScope('family', sources.family, canManageFamily)}</div>${add}</section>`;
 }
 
 
@@ -492,7 +502,7 @@ function bindKnowledgeSourceControls(container, knowledgeOptions) {
       event.preventDefault();
       if (!pathSelect.value) { showToast('Bitte eine vorhandene Quelle auswählen.', true); return; }
       try {
-        await updateTagCatalog({ action: 'save', scope: 'knowledge', tag: addForm.querySelector('[data-knowledge-tag]').value, source: { path: pathSelect.value, family: scopeSelect.value === 'family' } });
+        await updateTagCatalog({ action: 'save', scope: 'knowledge', tag: addForm.querySelector('[data-knowledge-tag]').value, source: { path: pathSelect.value, kind: addForm.querySelector('[data-knowledge-kind]').value, description: addForm.querySelector('[data-knowledge-description]').value.trim(), family: scopeSelect.value === 'family' } });
       } catch (error) { showToast(error.message, true); }
     });
   }
@@ -501,7 +511,7 @@ function bindKnowledgeSourceControls(container, knowledgeOptions) {
     const path = card.querySelector('[data-knowledge-path]').value;
     if (!path) { showToast('Bitte eine vorhandene Quelle auswählen.', true); return; }
     try {
-      await updateTagCatalog({ action: 'save', scope: 'knowledge', tag: card.dataset.tag, source: { path, family: card.dataset.scope === 'family' } });
+      await updateTagCatalog({ action: 'save', scope: 'knowledge', tag: card.dataset.tag, source: { path, kind: card.querySelector('[data-knowledge-kind]').value, description: card.querySelector('[data-knowledge-description]').value.trim(), family: card.dataset.scope === 'family' } });
     } catch (error) { showToast(error.message, true); }
   }));
   container.querySelectorAll('[data-knowledge-remove]').forEach((button) => button.addEventListener('click', async () => {
@@ -510,6 +520,35 @@ function bindKnowledgeSourceControls(container, knowledgeOptions) {
       await updateTagCatalog({ action: 'remove', scope: 'knowledge', tag: card.dataset.tag, source: { family: card.dataset.scope === 'family' } });
     } catch (error) { showToast(error.message, true); }
   }));
+}
+
+function writeTargetPathOptions(options, scope, selected = '') {
+  return knowledgePathOptions(options, scope, selected);
+}
+
+function writeTargetsSection(targets, options, externalRoots, canManagePersonal, canManageFamily) {
+  const card = (scope, entries, canManage) => Object.entries(entries || {}).map(([tag, target]) => {
+    const policy = target.file_policy || 'markdown_only';
+    const external = scope === 'host';
+    const rootOptions = (externalRoots || []).map((root) => `<option value="${escapeHtmlAttr(root.id)}"${root.id === target.root_id ? ' selected' : ''}>${escapeHtml(root.label)} · ${escapeHtml(root.path)}</option>`).join('');
+    const pathControl = external ? `<div class="grid gap-2 sm:grid-cols-2"><select data-write-target-root class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-xs text-gray-100">${rootOptions}</select><input data-write-target-path value="${escapeHtmlAttr(target.path || '')}" placeholder="/docker-storage/Projekt/Ordner" class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 font-mono text-xs text-gray-100" /></div>` : `<select data-write-target-path class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 font-mono text-xs text-gray-100">${writeTargetPathOptions(options, scope, target.path || '')}</select>`;
+    const controls = canManage ? `<div class="mt-2 grid gap-2">${pathControl}<label class="flex items-center gap-2 text-xs text-gray-300"><input data-write-target-all type="checkbox" ${policy === 'all_regular_files' ? 'checked' : ''} /> Alle regulären Dateien</label><div class="flex gap-2"><button type="button" data-write-target-save class="text-xs text-green-400">Speichern</button><button type="button" data-write-target-remove class="text-xs text-red-400">Entfernen</button></div></div>` : '';
+    return `<article data-write-target-card data-tag="${escapeHtmlAttr(tag)}" data-scope="${scope}" class="rounded border border-amber-900/60 bg-amber-950/20 p-3"><div class="flex flex-wrap justify-between gap-2"><strong class="text-sm text-amber-200">#${escapeHtml(tag)}</strong><span class="font-mono text-xs text-gray-400">${escapeHtml(scope)}:${escapeHtml(target.path || '')}</span></div><p class="mt-1 text-xs text-gray-500">${policy === 'all_regular_files' ? 'Alle regulären Textdateien' : 'Nur Markdown-Dateien (.md)'}</p>${controls}</article>`;
+  }).join('') || '<p class="text-xs text-gray-600">Keine</p>';
+  const add = (canManagePersonal || canManageFamily) ? `<form data-write-target-add class="grid gap-2"><div class="grid gap-2 sm:grid-cols-2"><input data-write-target-tag placeholder="schreibziel-projekt" class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-sm text-gray-100" /><select data-write-target-scope class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-sm text-gray-100"><option value="personal">Persönlich</option>${canManageFamily ? '<option value="family">Family</option>' : ''}</select></div><select data-write-target-path class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 font-mono text-xs text-gray-100"></select><label class="text-xs text-gray-300"><input data-write-target-all type="checkbox" /> Alle regulären Dateien statt nur .md</label><button class="rounded bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white">Schreibziel hinzufügen</button></form>` : '';
+  const externalAdd = externalRoots.length ? `<form data-external-write-target-add class="grid gap-2"><input data-write-target-tag placeholder="schreibziel-feature-request" class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-sm text-gray-100" /><div class="grid gap-2 sm:grid-cols-2"><select data-write-target-root class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-xs text-gray-100">${externalRoots.map((root) => `<option value="${escapeHtmlAttr(root.id)}">${escapeHtml(root.label)} · ${escapeHtml(root.path)}</option>`).join('')}</select><input data-write-target-path placeholder="Absoluter Linux-Pfad unter der Wurzel" class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 font-mono text-xs text-gray-100" /></div><label class="text-xs text-gray-300"><input data-write-target-all type="checkbox" /> Alle regulären Dateien statt nur .md</label><button class="rounded bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white">Externes Schreibziel hinzufügen</button></form>` : '<p class="text-xs text-gray-500">Keine externe Host-Wurzel in host_worker.json freigegeben.</p>';
+  return `<section class="bg-gray-900 border border-amber-900/60 rounded-xl p-4 space-y-3"><div><h3 class="font-medium text-amber-200">KI-Schreibziele</h3><p class="text-xs text-gray-500">Ein #schreibziel-… erlaubt Pi nur einen katalogisierten Ordnerbaum. Pi erstellt erst einen Vorschlag; die Anwendung schreibt erst nach „Anwenden“ revisionsgesichert mit Backup.</p></div><p class="text-xs text-gray-500">Persönlich</p>${card('personal', targets.personal, canManagePersonal)}<p class="text-xs text-gray-500">Family</p>${card('family', targets.family, canManageFamily)}<p class="text-xs text-gray-500">Externe Host-Ziele</p>${card('host', targets.host, canManagePersonal)}${externalAdd}${add}</section>`;
+}
+
+function bindWriteTargetControls(container, options) {
+  const payload = (card) => ({ path: card.querySelector('[data-write-target-path]').value.trim(), root_id: card.querySelector('[data-write-target-root]')?.value || '', file_policy: card.querySelector('[data-write-target-all]').checked ? 'all_regular_files' : 'markdown_only', family: card.dataset.scope === 'family' });
+  const form = container.querySelector('[data-write-target-add]');
+  const refresh = (scope, path) => { path.innerHTML = writeTargetPathOptions(options, scope.value); };
+  if (form) { const scope = form.querySelector('[data-write-target-scope]'); const path = form.querySelector('[data-write-target-path]'); refresh(scope, path); scope.addEventListener('change', () => refresh(scope, path)); form.addEventListener('submit', async (event) => { event.preventDefault(); try { await updateTagCatalog({ scope: 'write_target', action: 'save', tag: form.querySelector('[data-write-target-tag]').value, target: { path: path.value, file_policy: form.querySelector('[data-write-target-all]').checked ? 'all_regular_files' : 'markdown_only', family: scope.value === 'family' } }); } catch (error) { showToast(error.message, true); } }); }
+  const externalForm = container.querySelector('[data-external-write-target-add]');
+  if (externalForm) externalForm.addEventListener('submit', async (event) => { event.preventDefault(); try { await updateTagCatalog({ scope: 'write_target', action: 'save', tag: externalForm.querySelector('[data-write-target-tag]').value, target: { path: externalForm.querySelector('[data-write-target-path]').value.trim(), root_id: externalForm.querySelector('[data-write-target-root]').value, file_policy: externalForm.querySelector('[data-write-target-all]').checked ? 'all_regular_files' : 'markdown_only' } }); } catch (error) { showToast(error.message, true); } });
+  container.querySelectorAll('[data-write-target-save]').forEach((button) => button.addEventListener('click', async () => { const card = button.closest('[data-write-target-card]'); try { await updateTagCatalog({ scope: 'write_target', action: 'save', tag: card.dataset.tag, target: payload(card) }); } catch (error) { showToast(error.message, true); } }));
+  container.querySelectorAll('[data-write-target-remove]').forEach((button) => button.addEventListener('click', async () => { const card = button.closest('[data-write-target-card]'); try { await updateTagCatalog({ scope: 'write_target', action: 'remove', tag: card.dataset.tag, target: { family: card.dataset.scope === 'family' } }); } catch (error) { showToast(error.message, true); } }));
 }
 
 
@@ -543,7 +582,8 @@ async function loadTagCatalog() {
   }
   const catalog = data.catalog || {};
   const knowledgeOptions = data.knowledge_source_options || [];
-  container.innerHTML = `<div class="space-y-3"><button type="button" data-tag-catalog-back class="text-sm text-green-400 hover:text-green-300">Zurueck zu Timeline &amp; Suche</button>${aiWorkflowSection(catalog.ai || {})}${knowledgeSourcesSection(catalog.knowledge || {}, knowledgeOptions, data.can_manage_personal ?? true, data.can_manage_family ?? data.can_manage)}${tagCatalogSection('Meine Hashtags', 'personal', catalog.personal || {}, data.can_manage_personal ?? true)}${tagCatalogSection('Family-Hashtags', 'family', catalog.family || {}, data.can_manage_family ?? data.can_manage)}</div>`;
+  const writeTargetOptions = data.write_target_options || [];
+  container.innerHTML = `<div class="space-y-3"><button type="button" data-tag-catalog-back class="text-sm text-green-400 hover:text-green-300">Zurueck zu Timeline &amp; Suche</button>${aiWorkflowSection(catalog.ai || {})}${knowledgeSourcesSection(catalog.knowledge || {}, knowledgeOptions, data.can_manage_personal ?? true, data.can_manage_family ?? data.can_manage)}${writeTargetsSection(catalog.write_targets || {}, writeTargetOptions, data.external_write_roots || [], data.can_manage_personal ?? true, data.can_manage_family ?? data.can_manage)}${tagCatalogSection('Meine Hashtags', 'personal', catalog.personal || {}, data.can_manage_personal ?? true)}${tagCatalogSection('Family-Hashtags', 'family', catalog.family || {}, data.can_manage_family ?? data.can_manage)}</div>`;
   container.querySelectorAll('[data-ai-workflow-card]').forEach((card) => {
     const workflow = (catalog.ai || {})[card.dataset.tag] || {};
     const provider = card.querySelector('[data-ai-provider]');
@@ -590,6 +630,7 @@ async function loadTagCatalog() {
     } catch (error) { showToast(error.message, true); }
   });
   bindKnowledgeSourceControls(container, knowledgeOptions);
+  bindWriteTargetControls(container, writeTargetOptions);
 }
 
 

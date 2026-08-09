@@ -98,9 +98,11 @@ class WriteAiAndYoutubeTests(unittest.TestCase):
             })
         self.assertEqual(response.status_code, 200)
         prompt = call.call_args.args[2]
-        self.assertIn("Knowledge-Quelle #einkaufsliste (personal:notes/shopping.md)", prompt)
+        self.assertIn("## Benutzerauftrag\nBitte planen #normaler-tag", prompt)
+        self.assertIn("## Knowledge-Quellen (Referenzmaterial)", prompt)
+        self.assertIn("#einkaufsliste · reference · personal:notes/shopping.md", prompt)
         self.assertIn("Milch und Brot", prompt)
-        self.assertNotIn("#normaler-tag:", prompt)
+        self.assertIn("#normaler-tag", prompt)
         self.assertEqual(note.read_text(encoding="utf-8"), "# Einkauf\n\nMilch und Brot\n")
 
     def test_pi_job_contains_private_knowledge_snapshot_and_rejects_missing_source(self):
@@ -119,10 +121,13 @@ class WriteAiAndYoutubeTests(unittest.TestCase):
         job_id = response.get_json()["job_id"]
         job = json.loads((self.data_dir / "user-a/ai_jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
         self.assertEqual(job["knowledge_snapshots"], [{
-            "tag": "einkaufsliste", "scope": "personal", "path": "notes/shopping.md", "content": "# Einkauf\n\nMilch\n",
+            "tag": "einkaufsliste", "kind": "reference", "description": "", "scope": "personal", "path": "notes/shopping.md", "content": "# Einkauf\n\nMilch\n",
         }])
         snapshot = self.data_dir / job["knowledge_snapshot_paths"][0]
         self.assertEqual(snapshot.read_text(encoding="utf-8"), "# Einkauf\n\nMilch\n")
+        manifest = json.loads((self.data_dir / job["knowledge_manifest_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(manifest[0]["tag"], "einkaufsliste")
+        self.assertEqual(job["user_request"], "Bitte planen")
 
         note.unlink()
         rejected = self.client.post("/api/write-ai/submit", headers=self.headers, json={
@@ -131,6 +136,26 @@ class WriteAiAndYoutubeTests(unittest.TestCase):
         })
         self.assertEqual(rejected.status_code, 400)
         self.assertIn("Knowledge source", rejected.get_json()["error"])
+
+    def test_queued_pi_job_can_be_cancelled_and_undone_before_worker_start(self):
+        tagging.update_ai_workflow("user-a", "save", "ai-pi", {
+            "agent": "pi", "model": "provider/model", "prompt": "Plan", "context": "block", "target": "write_tab",
+        })
+        queued = self.client.post("/api/write-ai/submit", headers=self.headers, json={
+            "workflow_tag": "ai-pi", "provider_id": "__host_worker__", "model": "provider/model",
+            "context_type": "draft", "text": "Bitte planen #ai-pi",
+        })
+        self.assertEqual(queued.status_code, 202)
+        job_id = queued.get_json()["job_id"]
+        cancelled = self.client.post(f"/api/write-ai/jobs/{job_id}/cancel", headers=self.headers, json={})
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(cancelled.get_json(), {"ok": True, "status": "cancelled", "can_undo": True})
+        state = self.client.get(f"/api/write-ai/jobs/{job_id}", headers=self.headers).get_json()
+        self.assertEqual(state["status"], "cancelled")
+        self.assertTrue(state["can_undo"])
+        restored = self.client.post(f"/api/write-ai/jobs/{job_id}/undo-cancel", headers=self.headers, json={})
+        self.assertEqual(restored.status_code, 200)
+        self.assertEqual(restored.get_json(), {"ok": True, "status": "queued"})
 
     def test_youtube_mode_is_dev_only_presentation_state(self):
         with mock.patch.object(main, "IS_DEV", True):

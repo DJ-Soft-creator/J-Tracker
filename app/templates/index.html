@@ -115,19 +115,33 @@
     main, .tab-content { min-height: 0; }
 
     #input-area {
-      flex: 0 0 35%;
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
       width: 100%;
-      height: 35%;
+      height: auto;
       min-height: 0;
+      overflow: hidden;
       padding-right: max(1rem, var(--safe-right));
       padding-left: max(1rem, var(--safe-left));
     }
 
     #mobile-controls-scroll {
-      flex: 1 1 65%;
+      flex: 0 1 auto;
       min-height: 0;
+      max-height: 45%;
       padding-bottom: max(1rem, var(--safe-bottom));
     }
+
+    /* The editor uses all space not needed by the action row. */
+    #simple-input,
+    #form-container {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    #simple-input { height: 100%; }
 
     #mobile-controls-scroll > div {
       padding-right: max(1.5rem, var(--safe-right));
@@ -247,7 +261,6 @@
     #ai-controls > select { flex: 1 1 12rem; width: 100%; min-width: 0; }
 
     #ai-response-area,
-    #app-info-box,
     #dashboard-container,
     #family-container,
     #settings-modal,
@@ -335,6 +348,27 @@
     .journal-proposed-tag { color: #fdba74; }
     .journal-ai-tag { color: #bae6fd; }
     .journal-ai-text { color: #bae6fd; }
+    .write-hashtag-editor { position: relative; min-width: 0; width: 100%; }
+    .write-hashtag-textarea { height: 100%; }
+    .write-hashtag-highlight {
+      position: absolute; inset: 0; z-index: 2; overflow: hidden; pointer-events: none;
+      box-sizing: border-box; white-space: pre-wrap; overflow-wrap: break-word;
+      color: #f3f4f6; background: transparent; border: 1px solid transparent;
+    }
+    .write-hashtag-highlight-content { display: block; min-width: 100%; will-change: transform; }
+    .write-hashtag-input { position: relative; z-index: 1; background: transparent !important; color: transparent !important; caret-color: #f3f4f6; }
+    .write-hashtag-input::placeholder { color: #9ca3af; opacity: 1; }
+    .write-hashtag-input::selection { background: rgba(74, 222, 128, .35); color: transparent; }
+    /* The overlay covers tag zones, so spellcheck stays visible for prose but
+       cannot draw through a hashtag's solid background. */
+    .write-hashtag-ai { color: #bae6fd; background: #164e63; border-radius: .2em; }
+    .write-hashtag-knowledge { color: #ddd6fe; background: #4c1d95; border-radius: .2em; }
+    .write-hashtag-write-target { color: #fde68a; background: #78350f; border-radius: .2em; }
+    .write-hashtag-family { color: #f9a8d4; background: #831843; border-radius: .2em; }
+    .write-hashtag-approved { color: #86efac; background: #166534; border-radius: .2em; }
+    .write-hashtag-proposal { color: #fdba74; background: #9a3412; border-radius: .2em; }
+    .write-hashtag-unrecognised { background: #111827; border-radius: .2em; }
+    .write-hashtag-caret { display: inline-block; width: 1px; height: 1.2em; margin: 0 -0.5px; vertical-align: -.22em; background: #f3f4f6; }
     .brain-family-entry { border-color: rgba(244, 114, 182, 0.35); background-color: rgba(131, 24, 67, 0.16); }
     @keyframes writeAiGlow {
       0%, 100% { box-shadow: 0 0 5px rgba(255,255,255,.12), 0 0 10px rgba(74,222,128,.16); }
@@ -428,8 +462,8 @@
 
       <!-- Write tab -->
       <div id="tab-write" class="tab-content flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
-        <!-- Input area (fixed height, internal scroll) -->
-          <div id="input-area" class="h-[35%] px-4 py-3 overflow-y-auto shrink-0">
+        <!-- Input area fills all space not used by the action row. -->
+          <div id="input-area" class="px-4 py-3">
           <!-- Simple template: textarea with own scroll -->
           <textarea id="simple-input" rows="7" placeholder="Notiz eingeben..."
             class="w-full bg-transparent text-gray-100 focus:outline-none resize-none text-base leading-relaxed"></textarea>
@@ -439,8 +473,8 @@
           <div id="project-selector-container" class="hidden pt-2"></div>
         </div>
 
-        <!-- Scrollable lower area: controls + AI response + info box -->
-        <div id="mobile-controls-scroll" class="flex-1 min-h-0 min-w-0 overflow-y-auto">
+        <!-- Scrollable lower area: controls + AI response -->
+        <div id="mobile-controls-scroll" class="min-h-0 min-w-0 overflow-y-auto">
           <!-- All write actions share one horizontally scrollable row. -->
           <div class="px-6 py-3">
             <div class="flex flex-nowrap justify-center gap-2 items-center max-w-lg min-w-0 mx-auto overflow-visible">
@@ -458,11 +492,6 @@
           <!-- AI response area -->
           <div class="px-6">
             <div id="ai-response-area" class="w-full max-w-lg mx-auto bg-gray-800/20 border border-blue-700/30 rounded-xl px-4 py-3 text-sm text-gray-300 leading-relaxed whitespace-pre-wrap hidden"></div>
-          </div>
-
-          <!-- App-generated info box (non-editable) -->
-          <div class="px-6 mt-3">
-            <div id="app-info-box" class="w-full max-w-lg mx-auto bg-gray-800/10 border border-gray-700/10 rounded-xl px-4 py-3 text-sm text-gray-400 leading-relaxed whitespace-pre-wrap pointer-events-none select-none"></div>
           </div>
         </div>
 
@@ -1025,7 +1054,6 @@
       document.getElementById('ai-controls').classList.add('hidden');
       document.getElementById('submit-btn').textContent = 'KI Senden';
       renderProjectSelector(null);
-      updateAppInfoBox();
     }
 
     function handleTemplateChange(template) {
@@ -1052,7 +1080,6 @@
         renderForm(template, formContainer);
       }
       renderProjectSelector(template);
-      updateAppInfoBox();
     }
 
     // ─── init journal before submit ──────────────────────────────────
@@ -1063,6 +1090,23 @@
         console.error('Failed to init journal:', err);
       }
     }
+
+    // Browsers may restore textarea values from their page session after a
+    // reload. Clear only values that this app already confirmed as saved.
+    const normalSubmissionClearKey = 'journl:clear-submitted-write-input';
+    function rememberSuccessfulNormalSubmission() {
+      try { sessionStorage.setItem(normalSubmissionClearKey, '1'); } catch (_) {}
+    }
+    function clearRestoredSubmittedInput() {
+      try {
+        if (sessionStorage.getItem(normalSubmissionClearKey) === '1') {
+          document.getElementById('simple-input').value = '';
+        }
+      } catch (_) {}
+    }
+    document.getElementById('simple-input').addEventListener('input', () => {
+      try { sessionStorage.removeItem(normalSubmissionClearKey); } catch (_) {}
+    });
 
     // ─── submit handler (normal or AI based on template selection) ──────
     async function handleSubmit() {
@@ -1081,9 +1125,12 @@
 
         const template = config.templates.find(t => t.id === selectedId);
         let payload = {};
+        let submittedSimpleValue = null;
+        const submittedFormValues = new Map();
 
         if (template.type === 'simple') {
-          const content = document.getElementById('simple-input').value.trim();
+          submittedSimpleValue = document.getElementById('simple-input').value;
+          const content = submittedSimpleValue.trim();
           if (!content && template.id !== 'schnell') {
             showToast('Bitte Text eingeben', true);
             return;
@@ -1100,8 +1147,9 @@
               if (el) focusMobileControl(el);
               return;
             }
-            if (el && el.value.trim()) {
-              values[field.id] = el.value.trim();
+            if (el) {
+              submittedFormValues.set(field.id, el.value);
+              if (el.value.trim()) values[field.id] = el.value.trim();
             }
           }
           payload = { form_id: selectedId, values };
@@ -1136,25 +1184,23 @@
             // Die gerade übermittelten Felder anschließend leeren.
             if (template.type === 'simple') {
               const textarea = document.getElementById('simple-input');
-              textarea.classList.add('wipe-out');
-              setTimeout(() => {
+              if (textarea.value === submittedSimpleValue) {
+                rememberSuccessfulNormalSubmission();
                 textarea.value = '';
-                textarea.classList.remove('wipe-out');
                 focusMobileControl(textarea);
-              }, 350);
+              } else {
+                showToast('Gespeichert – neuer Text bleibt im Eingabefeld.');
+              }
             } else {
+              let hasNewInput = false;
               for (const field of template.fields) {
                 const el = document.getElementById('field-' + field.id);
-                if (el) {
-                  el.classList.add('wipe-out');
-                  setTimeout(() => {
-                    el.value = '';
-                    el.classList.remove('wipe-out');
-                  }, 350);
-                }
+                if (el && el.value === submittedFormValues.get(field.id)) el.value = '';
+                else if (el) hasNewInput = true;
               }
+              if (hasNewInput) showToast('Gespeichert – neue Eingaben bleiben erhalten.');
               const firstField = document.getElementById('field-' + template.fields[0].id);
-              if (firstField) setTimeout(() => focusMobileControl(firstField), 400);
+              if (firstField) focusMobileControl(firstField);
             }
           } else if (res.status === 409) {
             const err = await res.json();
@@ -1537,7 +1583,10 @@
     });
     window.addEventListener('resize', scheduleViewportUpdate);
     window.addEventListener('orientationchange', scheduleViewportUpdate);
-    window.addEventListener('pageshow', scheduleViewportUpdate);
+    window.addEventListener('pageshow', () => {
+      clearRestoredSubmittedInput();
+      scheduleViewportUpdate();
+    });
     if (appVisualViewport) {
       appVisualViewport.addEventListener('resize', scheduleViewportUpdate);
       appVisualViewport.addEventListener('scroll', scheduleViewportUpdate);
@@ -1560,19 +1609,7 @@
 
     // start on write tab
     switchTab('write');
-
-    // ─── init app info box ────────────────────────────────────────
-    const appInfoBox = document.getElementById('app-info-box');
-    function updateAppInfoBox() {
-      if (!appInfoBox) return;
-      const isAiMode = document.getElementById('template-select').value === AI_MODE_ID;
-      if (isAiMode) {
-        appInfoBox.textContent = 'KI-Modus aktiv: Text mit #ai-Hashtag eingeben und "KI Senden" klicken. Shortcut: Ctrl/⌘ + Alt/⌥ + K.';
-      } else {
-        appInfoBox.textContent = 'Text eingeben und "Senden" klicken oder Cmd+Enter drücken. KI-Modus: Ctrl/⌘ + Alt/⌥ + K.';
-      }
-    }
-    updateAppInfoBox();
+    clearRestoredSubmittedInput();
 
     // ─── settings modal ─────────────────────────────────────────────
     const settingsModal = document.getElementById('settings-modal');
@@ -2307,7 +2344,7 @@
   <script src="{{ url_for('static', filename='planner.js') }}"></script>
   <script src="{{ url_for('static', filename='journal-highlighting.js', v='20260808-4') }}"></script>
   <script src="{{ url_for('static', filename='brain.js', v='20260809-11') }}"></script>
-  <script src="{{ url_for('static', filename='write-hashtags.js', v='20260809-5') }}"></script>
-  <script src="{{ url_for('static', filename='write-ai.js', v='20260809-8') }}"></script>
+  <script src="{{ url_for('static', filename='write-hashtags.js', v='20260809-10') }}"></script>
+  <script src="{{ url_for('static', filename='write-ai.js', v='20260809-9') }}"></script>
 </body>
 </html>

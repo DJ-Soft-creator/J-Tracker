@@ -14,6 +14,17 @@
     'wordBreak', 'overflowWrap', 'direction',
   ];
   const caretMirror = document.createElement('div');
+  const highlightStates = new WeakMap();
+  const HASHTAG_RE = /(?<![\w#])#([\p{L}\p{N}_-]+)/gu;
+
+  const highlightClasses = {
+    ai: 'write-hashtag-ai',
+    knowledge: 'write-hashtag-knowledge',
+    write_target: 'write-hashtag-write-target',
+    family: 'write-hashtag-family',
+    approved: 'write-hashtag-approved',
+    proposal: 'write-hashtag-proposal',
+  };
 
   const menu = document.createElement('div');
   menu.id = 'write-hashtag-menu';
@@ -24,6 +35,91 @@
 
   function normalisePartial(value) {
     return (value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('de-DE');
+  }
+
+  function escapeHtml(value) {
+    const element = document.createElement('div');
+    element.textContent = value;
+    return element.innerHTML;
+  }
+
+  function suggestionForTag(rawTag) {
+    const normalised = normalisePartial(rawTag);
+    return catalogCandidates().find((candidate) => normalisePartial(candidate.name) === normalised) || null;
+  }
+
+  function highlightMarkup(value, caretOffset = null) {
+    let rendered = '';
+    let lastIndex = 0;
+    const addText = (text, offset, includeEnd = false) => {
+      const cursor = caretOffset !== null && caretOffset >= offset
+        && (caretOffset < offset + text.length || (includeEnd && caretOffset === offset + text.length))
+        ? caretOffset - offset : null;
+      if (cursor === null) return escapeHtml(text);
+      return `${escapeHtml(text.slice(0, cursor))}<span class="write-hashtag-caret"></span>${escapeHtml(text.slice(cursor))}`;
+    };
+    HASHTAG_RE.lastIndex = 0;
+    for (const match of String(value || '').matchAll(HASHTAG_RE)) {
+      rendered += addText(value.slice(lastIndex, match.index), lastIndex);
+      const suggestion = suggestionForTag(match[1]);
+      const className = suggestion && highlightClasses[suggestion.status === 'proposal'
+        ? 'proposal' : suggestion.status === 'ai'
+          ? 'ai' : suggestion.status === 'knowledge'
+            ? 'knowledge' : suggestion.family ? 'family' : 'approved'];
+      const tag = addText(match[0], match.index, true);
+      // Even a new, not-yet-catalogued hashtag is a hashtag rather than a
+      // spelling error.  Give it a neutral opaque mask until it is classified.
+      rendered += `<span class="${className || 'write-hashtag-unrecognised'}">${tag}</span>`;
+      lastIndex = match.index + match[0].length;
+    }
+    return rendered + addText(String(value || '').slice(lastIndex), lastIndex, true) + '\u200b';
+  }
+
+  function syncHighlight(state) {
+    if (!state.content) return;
+    const input = state.input;
+    const caretOffset = document.activeElement === input && input.selectionStart === input.selectionEnd
+      ? input.selectionStart : null;
+    state.content.innerHTML = highlightMarkup(input.value, caretOffset);
+    syncHighlightPosition(state);
+  }
+
+  function syncHighlightPosition(state) {
+    if (!state.content) return;
+    state.content.style.transform = `translate(${-state.input.scrollLeft}px, ${-state.input.scrollTop}px)`;
+  }
+
+  function bindHighlight(input) {
+    if (highlightStates.has(input)) return;
+    const wrapper = document.createElement('div');
+    wrapper.className = `write-hashtag-editor${input instanceof HTMLTextAreaElement ? ' write-hashtag-textarea' : ''}`;
+    const inputStyle = window.getComputedStyle(input);
+    wrapper.style.backgroundColor = inputStyle.backgroundColor;
+    input.parentNode.insertBefore(wrapper, input);
+    wrapper.appendChild(input);
+    const highlight = document.createElement('div');
+    highlight.className = 'write-hashtag-highlight';
+    highlight.setAttribute('aria-hidden', 'true');
+    const content = document.createElement('div');
+    content.className = 'write-hashtag-highlight-content';
+    highlight.appendChild(content);
+    wrapper.insertBefore(highlight, input);
+    input.classList.add('write-hashtag-input');
+    ['boxSizing', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'fontFamily',
+      'fontSize', 'fontWeight', 'fontStyle', 'fontVariant', 'letterSpacing', 'lineHeight',
+      'textAlign', 'textTransform', 'textIndent', 'textDecoration', 'wordSpacing', 'tabSize',
+      'wordBreak', 'overflowWrap', 'direction'].forEach((property) => {
+      highlight.style[property] = inputStyle[property];
+    });
+    highlight.style.whiteSpace = input instanceof HTMLTextAreaElement ? 'pre-wrap' : 'pre';
+    const state = { input, highlight, content };
+    highlightStates.set(input, state);
+    input.addEventListener('scroll', () => syncHighlightPosition(state));
+    input.addEventListener('input', () => syncHighlight(state));
+    ['focus', 'blur', 'click', 'keyup', 'select'].forEach((eventName) => {
+      input.addEventListener(eventName, () => syncHighlight(state));
+    });
+    syncHighlight(state);
   }
 
   function candidateMatchScore(name, query) {
@@ -50,6 +146,18 @@
       for (const tag of Object.keys(sources)) {
         candidates.set(tag, { name: tag, status: 'knowledge', family: scope === 'family' });
       }
+    }
+    // Write targets are routing-only permissions, distinct from Knowledge
+    // context. They must still be selectable in the writing tab so users do
+    // not have to remember their exact #schreibziel- spelling.
+    for (const tag of Object.keys(catalog.write_targets?.personal || {})) {
+      candidates.set(tag, { name: tag, status: 'write_target', family: false });
+    }
+    for (const tag of Object.keys(catalog.write_targets?.family || {})) {
+      candidates.set(tag, { name: tag, status: 'write_target', family: true });
+    }
+    for (const tag of Object.keys(catalog.write_targets?.host || {})) {
+      candidates.set(tag, { name: tag, status: 'write_target', family: false });
     }
     for (const scope of ['personal', 'family']) {
       const section = catalog[scope] || {};
@@ -81,6 +189,8 @@
           if (!response.ok) throw new Error('Hashtag-Katalog konnte nicht geladen werden.');
           const data = await response.json();
           catalog = data.catalog || {};
+          document.querySelectorAll('#tab-write textarea, #tab-write input[type="text"]')
+            .forEach((input) => syncHighlight(fieldStates.get(input)));
           return catalog;
         })
         .catch(() => {
@@ -162,6 +272,7 @@
     const nextCursor = before.length + suggestion.name.length + 1 + separator.length;
     input.setSelectionRange(nextCursor, nextCursor);
     input.dispatchEvent(new Event('input', { bubbles: true }));
+    syncHighlight(fieldStates.get(input));
     input.focus({ preventScroll: true });
     closeMenu();
   }
@@ -173,15 +284,15 @@
       const selected = index === state.selectedIndex;
       button.type = 'button';
       button.className = `flex w-full items-center justify-between gap-3 rounded px-3 py-2 text-left text-sm transition ${selected
-        ? (suggestion.status === 'ai' ? 'bg-sky-500/15 text-sky-200' : (suggestion.status === 'knowledge' ? 'bg-violet-500/15 text-violet-200' : (suggestion.family ? 'bg-pink-500/15 text-pink-200' : (suggestion.status === 'approved' ? 'bg-green-500/15 text-green-200' : 'bg-amber-500/15 text-amber-200'))))
-        : (suggestion.status === 'ai' ? 'text-sky-200 hover:bg-sky-500/10' : (suggestion.status === 'knowledge' ? 'text-violet-200 hover:bg-violet-500/10' : (suggestion.family ? 'text-pink-200 hover:bg-pink-500/10' : 'text-gray-200 hover:bg-gray-800')))}`;
+        ? (suggestion.status === 'ai' ? 'bg-sky-500/15 text-sky-200' : (suggestion.status === 'knowledge' ? 'bg-violet-500/15 text-violet-200' : (suggestion.status === 'write_target' ? 'bg-amber-500/15 text-amber-200' : (suggestion.family ? 'bg-pink-500/15 text-pink-200' : (suggestion.status === 'approved' ? 'bg-green-500/15 text-green-200' : 'bg-amber-500/15 text-amber-200')))))
+        : (suggestion.status === 'ai' ? 'text-sky-200 hover:bg-sky-500/10' : (suggestion.status === 'knowledge' ? 'text-violet-200 hover:bg-violet-500/10' : (suggestion.status === 'write_target' ? 'text-amber-200 hover:bg-amber-500/10' : (suggestion.family ? 'text-pink-200 hover:bg-pink-500/10' : 'text-gray-200 hover:bg-gray-800'))))}`;
       button.setAttribute('role', 'option');
       button.setAttribute('aria-selected', String(selected));
       button.textContent = `#${suggestion.name}`;
 
       const status = document.createElement('span');
-      status.className = suggestion.status === 'ai' ? 'text-xs text-sky-300' : (suggestion.status === 'knowledge' ? 'text-xs text-violet-300' : (suggestion.family ? 'text-xs text-pink-300' : (suggestion.status === 'approved' ? 'text-xs text-green-400' : 'text-xs text-amber-400')));
-      status.textContent = suggestion.status === 'ai' ? 'AI-Workflow' : (suggestion.status === 'knowledge' ? `Knowledge-Quelle${suggestion.family ? ' · Familie' : ''}` : (suggestion.family ? 'Familie' : (suggestion.status === 'approved' ? 'Freigegeben' : 'Vorschlag')));
+      status.className = suggestion.status === 'ai' ? 'text-xs text-sky-300' : (suggestion.status === 'knowledge' ? 'text-xs text-violet-300' : (suggestion.status === 'write_target' ? 'text-xs text-amber-300' : (suggestion.family ? 'text-xs text-pink-300' : (suggestion.status === 'approved' ? 'text-xs text-green-400' : 'text-xs text-amber-400'))));
+      status.textContent = suggestion.status === 'ai' ? 'AI-Workflow' : (suggestion.status === 'knowledge' ? `Knowledge-Quelle${suggestion.family ? ' · Familie' : ''}` : (suggestion.status === 'write_target' ? 'Schreibziel' : (suggestion.family ? 'Familie' : (suggestion.status === 'approved' ? 'Freigegeben' : 'Vorschlag'))));
       button.appendChild(status);
       button.addEventListener('mousedown', (event) => event.preventDefault());
       button.addEventListener('click', () => selectSuggestion(state, suggestion));
@@ -227,6 +338,7 @@
     input.setAttribute('aria-expanded', 'false');
     const state = { input, token: null, suggestions: [], selectedIndex: 0 };
     fieldStates.set(input, state);
+    bindHighlight(input);
 
     input.addEventListener('input', () => {
       state.selectedIndex = 0;
@@ -280,6 +392,9 @@
   document.addEventListener('focusin', (event) => {
     if (isWriteTextField(event.target)) activateField(bindField(event.target));
   });
+  document.addEventListener('selectionchange', () => {
+    if (activeState && document.activeElement === activeState.input) syncHighlight(activeState);
+  });
   document.addEventListener('mousedown', (event) => {
     if (!menu.contains(event.target) && activeState && event.target !== activeState.input) closeMenu();
   });
@@ -299,6 +414,8 @@
   window.refreshWriteHashtagCatalog = async function refreshWriteHashtagCatalog() {
     catalog = null;
     await loadCatalog();
+    document.querySelectorAll('#tab-write textarea, #tab-write input[type="text"]')
+      .forEach((input) => syncHighlight(fieldStates.get(input)));
     if (activeState) updateMenu(activeState);
   };
 }());

@@ -139,7 +139,7 @@ class TaggingTests(unittest.TestCase):
 
     def test_knowledge_sources_are_scoped_and_reject_unsafe_or_ambiguous_paths(self):
         saved = tagging.update_knowledge_source("alex", False, "save", "Shopping", {"path": "notes/shopping.md"})
-        self.assertEqual(saved, {"scope": "personal", "path": "notes/shopping.md"})
+        self.assertEqual(saved, {"scope": "personal", "path": "notes/shopping.md", "kind": "reference", "description": ""})
         view = tagging.catalog_view("alex")["knowledge"]
         self.assertEqual(view["personal"]["shopping"], saved)
         self.assertEqual(view["family"], {})
@@ -149,6 +149,28 @@ class TaggingTests(unittest.TestCase):
             tagging.update_knowledge_source("alex", False, "save", "draft", {"path": "temp_Eingabe.md"})
         with self.assertRaisesRegex(ValueError, "other scope"):
             tagging.update_knowledge_source("alex", True, "save", "shopping", {"path": "notes/shared.md"})
+
+    def test_write_targets_are_separate_and_support_both_file_policies(self):
+        saved = tagging.update_write_target("alex", False, "save", "schreibziel-plan", {
+            "path": "projects/plan", "file_policy": "all_regular_files",
+        })
+        self.assertEqual(saved, {"scope": "personal", "path": "projects/plan", "recursive": True, "file_policy": "all_regular_files"})
+        self.assertEqual(tagging.catalog_view("alex")["write_targets"]["personal"]["schreibziel-plan"], saved)
+        with self.assertRaisesRegex(ValueError, "schreibziel-"):
+            tagging.update_write_target("alex", False, "save", "ziel", {"path": "notes/x"})
+        with self.assertRaisesRegex(ValueError, "relativer Ordner"):
+            tagging.update_write_target("alex", False, "save", "schreibziel-ausbruch", {"path": "../x"})
+
+    def test_external_write_target_keeps_root_id_and_requires_absolute_linux_path(self):
+        saved = tagging.update_write_target("alex", False, "save", "schreibziel-dev", {
+            "root_id": "dev-projects", "path": "/docker-storage/Journal-Tracker-DEV/FeatureRequests",
+            "file_policy": "markdown_only",
+        })
+        self.assertEqual(saved["scope"], "host")
+        self.assertEqual(saved["root_id"], "dev-projects")
+        self.assertEqual(tagging.catalog_view("alex")["write_targets"]["host"]["schreibziel-dev"], saved)
+        with self.assertRaisesRegex(ValueError, "absoluter Linux-Pfad"):
+            tagging.update_write_target("alex", False, "save", "schreibziel-relativ", {"root_id": "dev-projects", "path": "notes/x"})
 
 
 if __name__ == "__main__":

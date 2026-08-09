@@ -55,6 +55,7 @@ def _catalog_default():
         "proposals": [],
         "ai_workflows": {},
         "knowledge_sources": {},
+        "write_targets": {},
     }
 
 
@@ -109,7 +110,11 @@ def _write_catalog(user_id, family, updater):
             normalise_tag(tag): source for tag, source in catalog.get("knowledge_sources", {}).items()
             if normalise_tag(tag) and isinstance(source, dict)
         }
-        known_tags = set(catalog["canonical"]) | set(catalog["ai_workflows"])
+        catalog["write_targets"] = {
+            normalise_tag(tag): target for tag, target in catalog.get("write_targets", {}).items()
+            if normalise_tag(tag).startswith("schreibziel-") and isinstance(target, dict)
+        }
+        known_tags = set(catalog["canonical"]) | set(catalog["ai_workflows"]) | set(catalog["knowledge_sources"]) | set(catalog["write_targets"])
         catalog["proposals"] = [tag for tag in catalog["proposals"] if tag not in known_tags]
         return json.dumps(catalog, ensure_ascii=False, indent=2, sort_keys=True) + "\n", result
 
@@ -134,6 +139,8 @@ def propose_tags(user_id, tags, family=False):
 def catalog_view(user_id):
     personal = read_catalog(user_id)
     family = read_catalog(family=True)
+    personal_targets = personal.get("write_targets", {})
+    family_targets = family.get("write_targets", {})
     return {
         "personal": personal,
         "family": family,
@@ -145,6 +152,11 @@ def catalog_view(user_id):
         "knowledge": {
             "personal": personal.get("knowledge_sources", {}),
             "family": family.get("knowledge_sources", {}),
+        },
+        "write_targets": {
+            "personal": {tag: value for tag, value in personal_targets.items() if value.get("scope") == "personal"},
+            "family": {tag: value for tag, value in family_targets.items() if value.get("scope") == "family"},
+            "host": {tag: value for tag, value in personal_targets.items() if value.get("scope") == "host"},
         },
     }
 
@@ -267,6 +279,8 @@ def update_knowledge_source(user_id, family, action, tag, source=None):
         elif action == "save":
             value = source or {}
             path = str(value.get("path") or "").strip()
+            kind = str(value.get("kind") or "reference").strip().casefold()
+            description = str(value.get("description") or "").strip()
             candidate = PurePosixPath(path)
             if (
                 not path or "\\" in path or candidate.is_absolute() or ".." in candidate.parts
@@ -274,11 +288,64 @@ def update_knowledge_source(user_id, family, action, tag, source=None):
                 or not candidate.parts or candidate.parts[0] not in {"notes", "projects"}
             ):
                 raise ValueError("Knowledge source must be a relative Markdown path")
-            sources[tag] = {"scope": "family" if family else "personal", "path": path}
+            if kind not in {"reference", "constraints", "glossary", "examples"}:
+                raise ValueError("Unknown knowledge source kind")
+            if len(description) > 240 or "\n" in description or "\r" in description:
+                raise ValueError("Knowledge source description must be a single line of at most 240 characters")
+            sources[tag] = {
+                "scope": "family" if family else "personal", "path": path,
+                "kind": kind, "description": description,
+            }
         else:
             raise ValueError("Unknown knowledge source action")
         catalog["knowledge_sources"] = sources
         return sources.get(tag)
+    return _write_catalog(user_id, family, update)
+
+
+def update_write_target(user_id, family, action, tag, target=None):
+    """Persist one explicitly granted directory tree for proposal-only AI edits."""
+    tag = normalise_tag(tag)
+    if not tag.startswith("schreibziel-") or len(tag) > 80:
+        raise ValueError("Schreibziel-Hashtags müssen mit schreibziel- beginnen")
+    other = read_catalog(user_id, family=not family)
+    if action == "save" and (tag in other.get("write_targets", {}) or tag in other.get("knowledge_sources", {})):
+        raise ValueError("Dieses Hashtag ist bereits im anderen Bereich konfiguriert")
+
+    def update(catalog):
+        targets = dict(catalog.get("write_targets", {}))
+        if action == "remove":
+            targets.pop(tag, None)
+        elif action == "save":
+            if tag in catalog.get("knowledge_sources", {}):
+                raise ValueError("Dieses Hashtag ist bereits als Knowledge-Quelle konfiguriert")
+            value = target or {}
+            path = str(value.get("path") or "").strip().rstrip("/")
+            policy = str(value.get("file_policy") or "markdown_only").strip().casefold()
+            if policy not in {"markdown_only", "all_regular_files"}:
+                raise ValueError("Unbekannte Schreibziel-Dateiregel")
+            root_id = str(value.get("root_id") or "").strip()
+            if root_id:
+                candidate = PurePosixPath(path)
+                if (not path or "\\" in path or not candidate.is_absolute() or ".." in candidate.parts
+                        or candidate.as_posix() != path or len(path) > 500):
+                    raise ValueError("Externes Schreibziel muss ein absoluter Linux-Pfad sein")
+                if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", root_id):
+                    raise ValueError("Ungültige externe Schreibziel-Wurzel")
+                targets[tag] = {"scope": "host", "root_id": root_id, "path": path,
+                                "recursive": True, "file_policy": policy}
+            else:
+                candidate = PurePosixPath(path)
+                if (not path or "\\" in path or candidate.is_absolute() or ".." in candidate.parts
+                        or candidate.as_posix() != path or not candidate.parts
+                        or candidate.parts[0] not in {"notes", "projects"}):
+                    raise ValueError("Schreibziel muss ein relativer Ordner unter notes oder projects sein")
+                targets[tag] = {"scope": "family" if family else "personal", "path": path,
+                                "recursive": True, "file_policy": policy}
+        else:
+            raise ValueError("Unknown write target action")
+        catalog["write_targets"] = targets
+        return targets.get(tag)
     return _write_catalog(user_id, family, update)
 
 

@@ -1118,6 +1118,42 @@ def _draft_revision(content):
     return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
 
 
+def _consume_write_draft(user_id, expected_revision):
+    """Clear exactly the draft revision that was explicitly transferred.
+
+    A newer save from another device must survive.  The caller can therefore
+    complete its own target write while learning that the shared draft moved on.
+    """
+    if expected_revision is None:
+        return {"requested": False, "consumed": False}
+    if not isinstance(expected_revision, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_revision):
+        raise ValueError("Ungültige Revision des KI-Schreibstands")
+    path = _write_draft_path(user_id)
+    result = {"requested": True, "consumed": False}
+
+    def consume(current):
+        current_revision = _draft_revision(current)
+        result["revision"] = current_revision
+        if current_revision != expected_revision:
+            return current
+        result["consumed"] = True
+        result["revision"] = _draft_revision("")
+        return ""
+
+    update_text_file(path, consume)
+    return result
+
+
+def _merge_write_ai_response(submitted, current, response):
+    """Apply an AI result without re-attaching the already submitted prompt."""
+    if current == submitted:
+        return response
+    if submitted and current.startswith(submitted):
+        additions = current[len(submitted):].strip()
+        return response if not additions else response + "\n\n" + additions
+    return None
+
+
 def _append_write_ai_history(user_id, event):
     """Persist a small per-user audit trail without ever sharing it as a journal."""
     path = DATA_DIR / user_id / "ai_write_history.json"
@@ -1376,7 +1412,9 @@ def api_write_ai_draft():
             # hidden marker again after a refresh or device switch.
             update_text_file(path, lambda _current: _strip_write_ai_session_metadata(_current))
             content = cleaned
-        return jsonify({"content": content, "revision": _draft_revision(content)})
+        response = jsonify({"content": content, "revision": _draft_revision(content)})
+        response.headers["Cache-Control"] = "no-store"
+        return response
     csrf_error = csrf_protect(lambda: None)()
     if csrf_error:
         return csrf_error
@@ -1483,7 +1521,8 @@ def api_write_ai_submit():
                  "agent": "pi", "model": job["model"], "context_type": context_type,
                  "status": "queued"}
         _append_write_ai_history(uid, event)
-        return jsonify({"ok": True, "queued": True, "job_id": job["id"], "status": "queued"}), 202
+        return jsonify({"ok": True, "queued": True, "job_id": job["id"], "status": "queued",
+                        "revision": _draft_revision(submitted)}), 202
     event = {"id": str(uuid.uuid4()), "at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"), "workflow_tag": tag, "provider_id": provider_id, "model": model, "context_type": context_type, "status": "running"}
     _append_write_ai_history(uid, event)
     try:
@@ -1495,12 +1534,19 @@ def api_write_ai_submit():
 
     result = {}
     def apply_response(current):
-        # A second device may have saved while the request was in flight.  Preserve
-        # that text below the atomic AI update instead of overwriting it.
-        final = response if current == submitted else response + "\n\n" + current
+        final = _merge_write_ai_response(submitted, current, response)
+        if final is None:
+            result["conflict"] = current
+            return current
         result["content"] = final
         return final
     update_text_file(draft_path, apply_response)
+    if "conflict" in result:
+        current = result["conflict"]
+        event.update({"status": "conflict", "error": "draft changed independently"})
+        _append_write_ai_history(uid, event)
+        return jsonify({"error": "Der KI-Schreibstand wurde während der Anfrage unabhängig geändert oder bereits übernommen.",
+                        "content": current, "revision": _draft_revision(current)}), 409
     event.update({"status": "completed"})
     _append_write_ai_history(uid, event)
     return jsonify({"ok": True, "response": response, "content": result["content"], "revision": _draft_revision(result["content"]), "provider_id": provider_id, "model": model, "context_type": context_type})
@@ -1522,6 +1568,59 @@ def api_write_ai_job(job_id):
     response["can_apply"] = job.get("status") == "proposed"
     response["can_undo"] = job.get("status") == "cancelled" and not job.get("started_at")
     return jsonify(response)
+
+
+@app.route("/api/write-ai/jobs/<job_id>/commit-draft", methods=["POST"])
+@require_auth
+@csrf_protect
+def api_commit_write_ai_job_draft(job_id):
+    """Commit one completed host result to the shared draft exactly once.
+
+    A consumed or independently replaced draft makes the result obsolete.  It
+    must never repopulate the normal writing field after a template switch.
+    """
+    user_id = _current_user()["id"]
+    job = _pi_job_response(user_id, job_id)
+    if not job:
+        return jsonify({"error": "KI-Job nicht gefunden"}), 404
+    status = job.get("status")
+    if status == "completed":
+        response_text = str(job.get("response") or "").strip()
+    elif status == "applied":
+        response_text = str(job.get("apply_summary") or "Schreibziel angewendet.").strip()
+    else:
+        return jsonify({"error": "KI-Ergebnis ist noch nicht übernahmebereit"}), 409
+    if not response_text:
+        return jsonify({"error": "KI-Ergebnis ist leer"}), 409
+
+    submitted = str(job.get("submitted_text") or "")
+    draft_path = _write_draft_path(user_id)
+    result = {}
+
+    def commit(current):
+        committed_revision = job.get("draft_commit_revision")
+        if committed_revision and _draft_revision(current) == committed_revision:
+            result.update(content=current, revision=committed_revision, already=True)
+            return current
+        final = _merge_write_ai_response(submitted, current, response_text)
+        if final is None:
+            result.update(conflict=True, revision=_draft_revision(current))
+            return current
+        result.update(content=final, revision=_draft_revision(final), already=False)
+        return final
+
+    update_text_file(draft_path, commit)
+    if result.get("conflict"):
+        return jsonify({"error": "Der KI-Schreibstand wurde bereits übernommen oder unabhängig geändert.",
+                        "revision": result["revision"], "obsolete": True}), 409
+
+    def remember_committed(committed_job, _result):
+        committed_job["draft_commit_revision"] = result["revision"]
+        committed_job["draft_committed_at"] = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+    _update_write_ai_job(user_id, job_id, remember_committed)
+    return jsonify({"ok": True, "content": result["content"], "revision": result["revision"],
+                    "already": result["already"]})
 
 
 @app.route("/api/write-ai/jobs/<job_id>/apply", methods=["POST"])
@@ -1770,6 +1869,12 @@ def api_submit():
     template_id = data.get("template_id") or data.get("form_id")
     content = data.get("content", "")
     values = data.get("values", {})
+    consume_draft_revision = data.get("consume_draft_revision")
+    if consume_draft_revision is not None and (
+        not isinstance(consume_draft_revision, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", consume_draft_revision)
+    ):
+        return jsonify({"error": "Ungültige Revision des KI-Schreibstands"}), 400
 
     logger.info(f"Submitting template {template_id}")
 
@@ -1899,6 +2004,9 @@ def api_submit():
             response["planner_id"] = planner_id
         if shopping_import:
             response.update(shopping_import)
+        consumed = _consume_write_draft(uid, consume_draft_revision)
+        if consumed["requested"]:
+            response.update(draft_consumed=consumed["consumed"], draft_revision=consumed["revision"])
         return jsonify(response)
 
     filepath = _get_journal_path(now)
@@ -1927,6 +2035,9 @@ def api_submit():
     response = {"ok": True, "ai_sessions": ai_sessions}
     if shopping_import:
         response.update(shopping_import)
+    consumed = _consume_write_draft(uid, consume_draft_revision)
+    if consumed["requested"]:
+        response.update(draft_consumed=consumed["consumed"], draft_revision=consumed["revision"])
     return jsonify(response)
 
 

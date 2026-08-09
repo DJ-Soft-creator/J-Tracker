@@ -176,7 +176,6 @@
     .write-hashtag-approved { color: #86efac; background: #166534; border-radius: .2em; }
     .write-hashtag-proposal { color: #fdba74; background: #9a3412; border-radius: .2em; }
     .write-hashtag-unrecognised { background: #111827; border-radius: .2em; }
-    .write-hashtag-caret { display: inline-block; width: 1px; height: 1.2em; margin: 0 -0.5px; vertical-align: -.22em; background: #f3f4f6; }
     .brain-family-entry { border-color: rgba(244, 114, 182, 0.35); background-color: rgba(131, 24, 67, 0.16); }
     @keyframes writeAiGlow {
       0%, 100% { box-shadow: 0 0 5px rgba(255,255,255,.12), 0 0 10px rgba(74,222,128,.16); }
@@ -982,6 +981,11 @@
         const projectAssignment = document.getElementById('project-assignment');
         if (projectAssignment && projectAssignment.value) payload.project_assignment = projectAssignment.value;
 
+        if (template.type === 'simple' && typeof window.writeAiDraftRevisionForSubmit === 'function') {
+          const draftRevisionToConsume = await window.writeAiDraftRevisionForSubmit();
+          if (draftRevisionToConsume) payload.consume_draft_revision = draftRevisionToConsume;
+        }
+
         if (template.write_to_journal !== false) await initJournal();
 
         const submitBtn = document.getElementById('submit-btn');
@@ -994,8 +998,10 @@
             method: 'POST',
             body: JSON.stringify(payload)
           });
+          const responseData = await res.json().catch(() => ({}));
 
           if (res.ok) {
+            if (typeof window.markWriteAiDraftSubmitted === 'function') window.markWriteAiDraftSubmitted(responseData);
             showToast(template.id === 'einkaufsliste' ? 'Einkaufsliste übernommen ✅' : 'Gespeichert! ✅');
             if (typeof window.refreshWriteHashtagCatalog === 'function') window.refreshWriteHashtagCatalog();
             // Nach jedem normalen Template zurück zu „Schnell“ wechseln.
@@ -1027,11 +1033,9 @@
               if (firstField) firstField.focus();
             }
           } else if (res.status === 409) {
-            const err = await res.json();
-            showToast('Konflikt: ' + err.error, true);
+            showToast('Konflikt: ' + responseData.error, true);
           } else {
-            const err = await res.json();
-            showToast(err.error || 'Speichern fehlgeschlagen', true);
+            showToast(responseData.error || 'Speichern fehlgeschlagen', true);
           }
         } catch (err) {
           showToast('Netzwerkfehler', true);
@@ -2286,7 +2290,7 @@
   <script src="{{ url_for('static', filename='planner.js') }}"></script>
   <script src="{{ url_for('static', filename='journal-highlighting.js', v='20260808-4') }}"></script>
   <script src="{{ url_for('static', filename='brain.js', v='20260809-11') }}"></script>
-  <script src="{{ url_for('static', filename='write-hashtags.js', v='20260809-10') }}"></script>
-  <script src="{{ url_for('static', filename='write-ai.js', v='20260809-9') }}"></script>
+  <script src="{{ url_for('static', filename='write-hashtags.js', v='20260809-11') }}"></script>
+  <script src="{{ url_for('static', filename='write-ai.js', v='20260809-11') }}"></script>
 </body>
 </html>

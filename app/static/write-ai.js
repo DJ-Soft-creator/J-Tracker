@@ -3,36 +3,148 @@
 (function () {
   let draftRevision = null;
   let draftTimer = null;
+  let draftSaveChain = Promise.resolve();
+  let draftDirty = false;
+  let draftLoadSerial = 0;
+  let editorMode = 'normal';
+  let aiModeEpoch = 0;
+  let pendingConsumptionRevision = null;
+  let suppressDraftInput = false;
+  let editorUserEdited = false;
+  let aiRequestInFlight = false;
   let writeWorkflows = [];
   let activeHostJob = null;
 
   function editor() { return document.getElementById('simple-input'); }
   function isWritingMode() { return document.getElementById('template-select')?.value === '__ai_mode__'; }
   function safeShow(message, error) { if (typeof window.showToast === 'function') window.showToast(message, error); }
+  function setEditorContent(content, { autosave = true } = {}) {
+    const field = editor();
+    if (!field) return null;
+    field.value = content;
+    const end = field.value.length;
+    field.setSelectionRange(end, end);
+    // The visible hashtag highlighting is a separate overlay. Assigning
+    // textarea.value does not emit input by itself, so explicitly notify it
+    // (and the private-draft autosave) whenever AI changes the editor.
+    suppressDraftInput = !autosave;
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    suppressDraftInput = false;
+    return field;
+  }
 
-  async function loadDraft() {
-    // The private AI draft must never populate the normal writing templates.
-    if (!isWritingMode()) return;
+  function persistDraft(content, { allowInactive = false, epoch = aiModeEpoch } = {}) {
+    draftSaveChain = draftSaveChain.catch(() => {}).then(async () => {
+      if (!allowInactive && (editorMode !== 'ai' || epoch !== aiModeEpoch || !isWritingMode())) return null;
+      if (draftRevision === null) return null;
+      const expectedRevision = draftRevision;
+      const res = await window.apiFetch('/api/write-ai/draft', {
+        method: 'POST',
+        body: JSON.stringify({ content, revision: expectedRevision })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        draftRevision = data.revision;
+        draftDirty = editorMode === 'ai' && editor()?.value !== content;
+        return data.revision;
+      }
+      if (res.status === 409) {
+        draftRevision = data.revision || null;
+        if (editorMode === 'ai' && epoch === aiModeEpoch && isWritingMode()) {
+          const field = editor();
+          if (field && field.value === content) {
+            setEditorContent(data.content || '', { autosave: false });
+            draftDirty = false;
+            safeShow('Der neuere Schreibstand eines anderen Geräts wurde geladen.');
+          } else {
+            draftDirty = true;
+            queueDraftSave();
+          }
+        } else {
+          pendingConsumptionRevision = null;
+          safeShow('Der KI-Schreibstand wurde auf einem anderen Gerät geändert und nicht automatisch geleert.', true);
+        }
+        return null;
+      }
+      throw new Error(data.error || 'KI-Schreibstand konnte nicht gespeichert werden.');
+    }).catch((error) => {
+      safeShow(error?.message || 'KI-Schreibstand konnte nicht gespeichert werden.', true);
+      return null;
+    });
+    return draftSaveChain;
+  }
+
+  async function loadDraft({ handoffContent = '', handoffIsUserInput = false } = {}) {
+    if (editorMode !== 'ai' || !isWritingMode()) return;
+    const epoch = aiModeEpoch;
+    const serial = ++draftLoadSerial;
+    const field = editor();
+    if (field) field.readOnly = true;
     try {
-      const res = await window.apiFetch('/api/write-ai/draft');
+      const res = await window.apiFetch('/api/write-ai/draft', { cache: 'no-store' });
       if (!res.ok) return;
       const data = await res.json();
+      if (serial !== draftLoadSerial || epoch !== aiModeEpoch || editorMode !== 'ai' || !isWritingMode()) return;
       draftRevision = data.revision;
-      if (editor() && !editor().value) editor().value = data.content || '';
+      const explicitHandoff = handoffIsUserInput && handoffContent.trim();
+      setEditorContent(explicitHandoff ? handoffContent : (data.content || ''), { autosave: false });
+      draftDirty = Boolean(explicitHandoff && handoffContent !== (data.content || ''));
+      if (draftDirty) await persistDraft(handoffContent, { epoch });
     } catch (_) { /* Offline editing remains available. */ }
+    finally {
+      if (serial === draftLoadSerial && epoch === aiModeEpoch && editor()) editor().readOnly = false;
+    }
   }
   async function saveDraft() {
     const field = editor();
-    // Normal journal submissions are final and must not revive a private AI
-    // draft on the next page load.
-    if (!isWritingMode() || !field || draftRevision === null) return;
-    const res = await window.apiFetch('/api/write-ai/draft', { method: 'POST', body: JSON.stringify({ content: field.value, revision: draftRevision }) });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) draftRevision = data.revision;
-    // A remote device wins only when this local editor has not changed again.
-    else if (res.status === 409 && field.value === (data.content || '')) draftRevision = data.revision;
+    if (editorMode !== 'ai' || !isWritingMode() || !field || draftRevision === null) return null;
+    return persistDraft(field.value, { epoch: aiModeEpoch });
   }
   function queueDraftSave() { clearTimeout(draftTimer); draftTimer = setTimeout(saveDraft, 450); }
+
+  function leaveWritingAiMode() {
+    if (editorMode !== 'ai') return;
+    clearTimeout(draftTimer);
+    const field = editor();
+    const content = field?.value || '';
+    const leavingEpoch = aiModeEpoch;
+    pendingConsumptionRevision = draftRevision;
+    editorMode = 'normal';
+    aiModeEpoch += 1;
+    draftLoadSerial += 1;
+    if (field) field.readOnly = false;
+    if (draftRevision !== null) {
+      persistDraft(content, { allowInactive: true, epoch: leavingEpoch }).then((revision) => {
+        if (revision && editorMode === 'normal' && aiModeEpoch === leavingEpoch + 1) {
+          pendingConsumptionRevision = revision;
+        }
+      });
+    }
+    const controls = document.getElementById('write-ai-job-actions');
+    if (controls) controls.classList.add('hidden');
+    const button = document.getElementById('submit-btn');
+    if (button) {
+      button.disabled = false;
+      button.classList.remove('write-ai-working');
+      button.setAttribute('aria-busy', 'false');
+    }
+  }
+
+  window.writeAiDraftRevisionForSubmit = async function () {
+    await draftSaveChain.catch(() => {});
+    return pendingConsumptionRevision;
+  };
+  window.markWriteAiDraftSubmitted = function (data) {
+    if (!pendingConsumptionRevision) return;
+    if (data?.draft_consumed) {
+      draftRevision = data.draft_revision;
+      pendingConsumptionRevision = null;
+      draftDirty = false;
+    } else if (Object.prototype.hasOwnProperty.call(data || {}, 'draft_consumed')) {
+      pendingConsumptionRevision = null;
+      safeShow('Gespeichert. Ein neuerer KI-Schreibstand eines anderen Geräts bleibt erhalten.');
+    }
+  };
 
   async function refreshWorkflows() {
     try {
@@ -56,11 +168,23 @@
     const button = document.getElementById('submit-btn');
     const status = document.getElementById('ai-response-area');
     if (!button || !status) return;
+    // Once another template owns the shared button, an old AI request must not
+    // enable, disable or relabel that template's in-flight submission.
+    if (!isWritingMode()) return;
     button.disabled = busy;
     button.classList.toggle('write-ai-working', busy);
     button.setAttribute('aria-busy', String(busy));
     button.textContent = busy ? 'KI arbeitet…' : 'KI Senden';
     if (busy) { status.classList.remove('hidden'); status.textContent = 'KI-Anfrage wird vorbereitet – du kannst weiter schreiben.'; }
+  }
+
+  function mergeResponseWithNewInput(responseText, snapshot, current) {
+    if (current === snapshot) return responseText;
+    if (snapshot && current.startsWith(snapshot)) {
+      const additions = current.slice(snapshot.length).trim();
+      return additions ? `${responseText}\n\n${additions}` : responseText;
+    }
+    return null;
   }
 
   function jobActionControls() {
@@ -132,7 +256,7 @@
         const poll = await window.apiFetch(`/api/write-ai/jobs/${encodeURIComponent(activeHostJob.id)}`);
         const job = await poll.json().catch(() => ({}));
         if (!poll.ok) { safeShow(job.error || 'Anwendungsstatus konnte nicht gelesen werden.', true); return; }
-        if (job.status === 'applied') { await finishHostResponse(job.apply_summary || 'Externes Schreibziel angewendet.', activeHostJob.snapshot); return; }
+        if (job.status === 'applied') { await finishHostResponse(activeHostJob.id, activeHostJob.epoch); return; }
         if (job.status === 'error') { safeShow(job.error || 'Externes Schreibziel konnte nicht angewendet werden.', true); return; }
       }
       safeShow('Host-Worker hat die Anwendung noch nicht abgeschlossen.', true);
@@ -140,7 +264,7 @@
     }
     const status = document.getElementById('ai-response-area');
     if (status) { status.classList.remove('hidden'); status.textContent = data.summary || 'Schreibziel angewendet.'; }
-    await finishHostResponse(data.summary || 'Schreibziel angewendet.', activeHostJob.snapshot);
+    await finishHostResponse(activeHostJob.id, activeHostJob.epoch);
   }
 
   function clearJobActions() {
@@ -160,14 +284,28 @@
     if (status) { status.classList.remove('hidden'); status.textContent = data.status === 'cancelled' ? 'KI-Job abgebrochen.' : 'Abbruch für Pi angefragt…'; }
   }
 
-  async function finishHostResponse(responseText, snapshot) {
-    const field = editor();
-    if (!field) return;
-    const merged = field.value !== snapshot ? `${responseText}\n\n${field.value}` : responseText;
-    field.value = merged;
-    await saveDraft();
+  async function finishHostResponse(jobId, requestEpoch) {
+    const committed = await window.apiFetch(`/api/write-ai/jobs/${encodeURIComponent(jobId)}/commit-draft`, {
+      method: 'POST', body: JSON.stringify({})
+    });
+    const data = await committed.json().catch(() => ({}));
     const status = document.getElementById('ai-response-area');
-    if (status) { status.classList.remove('hidden'); status.textContent = 'KI-Ergebnis in den temporären Schreibstand übernommen.'; }
+    if (!committed.ok) {
+      if (status) {
+        status.classList.remove('hidden');
+        status.textContent = data.obsolete
+          ? 'KI-Ergebnis wurde nicht in einen bereits übernommenen oder geänderten Schreibstand eingefügt.'
+          : (data.error || 'KI-Ergebnis konnte nicht übernommen werden.');
+      }
+      clearJobActions();
+      return;
+    }
+    draftRevision = data.revision;
+    draftDirty = false;
+    if (editorMode === 'ai' && isWritingMode() && requestEpoch === aiModeEpoch) {
+      setEditorContent(data.content || '', { autosave: false });
+      if (status) { status.classList.remove('hidden'); status.textContent = 'KI-Ergebnis in den temporären Schreibstand übernommen.'; }
+    }
     clearJobActions();
     safeShow('KI-Antwort übernommen');
   }
@@ -182,8 +320,8 @@
     renderJobActions(activeHostJob);
     setBusy(true);
     try {
-      const answer = await waitForHostJob(activeHostJob.id);
-      await finishHostResponse(answer, activeHostJob.snapshot);
+      await waitForHostJob(activeHostJob.id);
+      await finishHostResponse(activeHostJob.id, activeHostJob.epoch);
     } catch (error) {
       const status = document.getElementById('ai-response-area');
       if (status) { status.classList.remove('hidden'); status.textContent = `KI-Fehler: ${error?.message || 'KI-Job fehlgeschlagen.'}`; }
@@ -249,28 +387,36 @@
     clearTimeout(draftTimer);
     await saveDraft();
     const snapshot = field.value;
+    const requestEpoch = aiModeEpoch;
+    aiRequestInFlight = true;
     setBusy(true);
     try {
       const res = await window.apiFetch('/api/write-ai/submit', { method: 'POST', body: JSON.stringify({ workflow_tag: workflowTag, provider_id: useHostWorker ? '__host_worker__' : provider.id, model: useHostWorker ? workflow.model : provider.model, context_type: 'draft', text: snapshot, revision: draftRevision }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { safeShow(data.error || 'KI-Anfrage fehlgeschlagen.', true); return; }
       if (data.queued) {
-        activeHostJob = { id: data.job_id, status: 'queued', can_undo: false, snapshot };
+        if (data.revision) draftRevision = data.revision;
+        activeHostJob = { id: data.job_id, status: 'queued', can_undo: false, snapshot, epoch: requestEpoch };
         renderJobActions(activeHostJob);
         data.response = await waitForHostJob(data.job_id);
-        data.content = data.response;
       }
-      // Never discard keystrokes made while the request was running.
-      if (data.queued && data.response !== null) await finishHostResponse(data.response, snapshot);
-      else field.value = field.value !== snapshot ? `${data.response}\n\n${field.value}` : data.content;
-      // Persist both the result and any keystrokes made while Pi was running.
-      // The revision-aware draft endpoint prevents a second device from being
-      // overwritten if it saved in the meantime.
-      if (data.revision) draftRevision = data.revision;
-      await saveDraft();
-      if (!data.queued) {
+      if (data.queued && data.response !== null) {
+        await finishHostResponse(data.job_id, requestEpoch);
+      } else if (!data.queued) {
+        clearTimeout(draftTimer);
+        if (data.revision) draftRevision = data.revision;
+        if (editorMode === 'ai' && isWritingMode() && requestEpoch === aiModeEpoch) {
+          const current = field.value;
+          const localMerged = mergeResponseWithNewInput(data.response || '', snapshot, current);
+          const content = data.content === data.response && localMerged ? localMerged : data.content;
+          setEditorContent(content || '', { autosave: false });
+          draftDirty = content !== data.content;
+          if (draftDirty) await persistDraft(content, { epoch: requestEpoch });
+        }
         const status = document.getElementById('ai-response-area');
-        status.classList.remove('hidden'); status.textContent = 'KI-Ergebnis in den temporären Schreibstand übernommen.';
+        if (status && editorMode === 'ai' && requestEpoch === aiModeEpoch) {
+          status.classList.remove('hidden'); status.textContent = 'KI-Ergebnis in den temporären Schreibstand übernommen.';
+        }
         safeShow('KI-Antwort übernommen');
       }
     } catch (error) {
@@ -279,7 +425,7 @@
       if (status) { status.classList.remove('hidden'); status.textContent = error?.cancelled ? message : `KI-Fehler: ${message}`; }
       safeShow(message, !error?.cancelled);
     }
-    finally { setBusy(false); }
+    finally { aiRequestInFlight = false; setBusy(false); }
   }
 
   document.addEventListener('keydown', (event) => {
@@ -295,7 +441,22 @@
     field.dispatchEvent(new Event('input', { bubbles: true }));
   });
   document.addEventListener('input', (event) => {
-    if (event.target === editor() && isWritingMode()) queueDraftSave();
+    if (event.target !== editor()) return;
+    if (event.isTrusted) editorUserEdited = true;
+    if (!suppressDraftInput && editorMode === 'ai' && isWritingMode()) {
+      draftDirty = true;
+      queueDraftSave();
+    }
+  });
+
+  function refreshVisibleDraft() {
+    if (editorMode === 'ai' && isWritingMode() && !draftDirty && !activeHostJob && !aiRequestInFlight) {
+      loadDraft();
+    }
+  }
+  window.addEventListener('focus', refreshVisibleDraft);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshVisibleDraft();
   });
 
   const waitForPage = setInterval(() => {
@@ -303,13 +464,29 @@
     clearInterval(waitForPage);
     const oldAiMode = window.handleAiMode;
     window.handleAiMode = function () {
+      const field = editor();
+      const handoffContent = field?.value || '';
+      const handoffIsUserInput = editorUserEdited;
+      editorMode = 'ai';
+      aiModeEpoch += 1;
+      pendingConsumptionRevision = null;
+      editorUserEdited = false;
+      draftDirty = false;
       oldAiMode();
       refreshWorkflows();
-      loadDraft();
-      document.getElementById('submit-btn').textContent = isWritingMode() ? 'KI Senden' : 'Senden';
+      loadDraft({ handoffContent, handoffIsUserInput });
+      if (activeHostJob && ['queued', 'running', 'cancelling'].includes(activeHostJob.status)) setBusy(true);
+      renderJobActions(activeHostJob);
+      if (!activeHostJob || !['queued', 'running', 'cancelling'].includes(activeHostJob.status)) {
+        document.getElementById('submit-btn').textContent = isWritingMode() ? 'KI Senden' : 'Senden';
+      }
     };
     const oldTemplateChange = window.handleTemplateChange;
-    window.handleTemplateChange = function (template) { oldTemplateChange(template); };
+    window.handleTemplateChange = function (template) {
+      if (editorMode === 'ai') leaveWritingAiMode();
+      oldTemplateChange(template);
+      editorUserEdited = false;
+    };
     const oldSubmit = window.handleSubmit;
     window.handleSubmit = function () { return isWritingMode() ? submitWritingAi() : oldSubmit(); };
     const select = document.getElementById('template-select');

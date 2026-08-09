@@ -9,9 +9,9 @@ services:
     ports:
       - "${PORT:-4100}:4098"
     env_file:
-      - /path/to/journal-data-dev/.env
+      - /docker-storage/my_Journal_data_DEV/data/journals/.env
     volumes:
-      - /path/to/journal-data-dev/:/app/data
+      - /docker-storage/my_Journal_data_DEV/data/journals/:/app/data
     environment:
       - TZ=Europe/Berlin
       - DATA_DIR=/app/data
@@ -30,9 +30,9 @@ services:
     container_name: journaling-tracker-dev-scheduler
     restart: unless-stopped
     env_file:
-      - /path/to/journal-data-dev/.env
+      - /docker-storage/my_Journal_data_DEV/data/journals/.env
     volumes:
-      - /path/to/journal-data-dev/:/app/data
+      - /docker-storage/my_Journal_data_DEV/data/journals/:/app/data
     environment:
       - TZ=Europe/Berlin
       - DATA_DIR=/app/data

@@ -1099,6 +1099,21 @@ def _write_draft_path(user_id):
     return DATA_DIR / user_id / "temp_Eingabe.md"
 
 
+_WRITE_AI_SESSION_CONFIG_RE = re.compile(
+    r"<!--\s*jt:agent-session-config\s*\n.*?\n-->\s*\n?", re.DOTALL,
+)
+
+
+def _strip_write_ai_session_metadata(content):
+    """Keep host-runner control metadata out of the visible draft/result.
+
+    The marker belongs only to the temporary source file consumed by the host
+    runner.  It is not user content and must never be sent back as part of a
+    Pi answer or retained in ``temp_Eingabe.md``.
+    """
+    return _WRITE_AI_SESSION_CONFIG_RE.sub("", content or "").lstrip("\n")
+
+
 def _draft_revision(content):
     return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
 
@@ -1118,6 +1133,112 @@ def _append_write_ai_history(user_id, event):
     update_text_file(path, update)
 
 
+def _write_ai_job_paths(user_id, job_id):
+    root = DATA_DIR / user_id / "ai_jobs"
+    return root, root / f"{job_id}.json", root / f"{job_id}.source.md", root / f"{job_id}.prompt.md"
+
+
+def _knowledge_snapshots_for_write(user_id, text):
+    """Create the in-memory snapshot list for the explicitly submitted text.
+
+    Normal catalog tags are deliberately absent from this lookup.  A hashtag is
+    context only when it has an explicit entry in ``knowledge_sources``.  The
+    source is resolved again here rather than trusting its earlier catalog-save
+    validation, because Family access and files can change at any time.
+    """
+    catalog = tagging_module.catalog_view(user_id).get("knowledge", {})
+    personal = catalog.get("personal", {}) if isinstance(catalog, dict) else {}
+    family = catalog.get("family", {}) if isinstance(catalog, dict) else {}
+    tags = {
+        tagging_module.normalise_tag(match.group(1))
+        for match in re.finditer(r"(?<![\w#])#([\w-]+)", text or "", re.UNICODE)
+    }
+    snapshots = []
+    total_bytes = 0
+    for knowledge_tag in sorted(tag for tag in tags if tag and not tag.startswith("ai-")):
+        matches = []
+        if isinstance(personal.get(knowledge_tag), dict):
+            matches.append(("personal", personal[knowledge_tag]))
+        if isinstance(family.get(knowledge_tag), dict):
+            matches.append(("family", family[knowledge_tag]))
+        if not matches:
+            # Unknown and ordinary hashtags have no AI meaning.
+            continue
+        if len(matches) != 1:
+            raise ValueError(f"Knowledge-Hashtag #{knowledge_tag} ist mehrdeutig konfiguriert")
+        scope, configured = matches[0]
+        source = brain_module.resolve_knowledge_source(user_id, scope, configured.get("path"))
+        content = source["content"]
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes > 1_000_000 or total_bytes + content_bytes > 4_000_000:
+            raise ValueError(f"Knowledge-Quelle #{knowledge_tag} ist für einen Snapshot zu groß")
+        total_bytes += content_bytes
+        snapshots.append({"tag": knowledge_tag, **source})
+    return snapshots
+
+
+def _queue_pi_write_job(user_id, tag, workflow, context_type, submitted, context, knowledge_snapshots=None):
+    """Create one immutable host-Pi job after an explicit browser submission."""
+    job_id = str(uuid.uuid4())
+    session_id = str(uuid.uuid4())
+    root, job_path, source_path, prompt_path = _write_ai_job_paths(user_id, job_id)
+    root.mkdir(parents=True, exist_ok=True)
+    source = "<!-- jt:agent-session-config\n" + json.dumps({"session_id": session_id, "source_revision": ""}) + "\n-->\n\n" + context
+    write_text_file(source_path, source)
+    # Match the host runner's self-referential revision calculation exactly.
+    # The runner normalises the config field before hashing, including its
+    # whitespace, so hashing the raw source would always cause a false conflict.
+    revision_source = re.sub(r'"source_revision"\s*:\s*"[^"]*"', '"source_revision":""', source)
+    expected_revision = hashlib.sha256(revision_source.encode("utf-8")).hexdigest()
+    prompt = str(workflow.get("prompt", "")).strip()
+    write_text_file(prompt_path, prompt)
+    snapshot_paths = []
+    for index, snapshot in enumerate(knowledge_snapshots or [], start=1):
+        # Snapshot files are private immutable job inputs, never the original
+        # Notes/Projects.  The worker receives only these paths.
+        snapshot_path = root / f"{job_id}.knowledge-{index}.md"
+        write_text_file(snapshot_path, snapshot["content"])
+        snapshot_paths.append(snapshot_path.relative_to(DATA_DIR).as_posix())
+    job = {
+        "id": job_id, "session_id": session_id, "status": "queued",
+        "created_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        "user_id": user_id, "workflow_tag": tag, "agent": "pi",
+        "model": str(workflow.get("model", "")).strip(), "context_type": context_type,
+        # The protected host audit log records this exact request payload.
+        "prompt": prompt, "context": context, "submitted_text": submitted,
+        "knowledge_snapshots": knowledge_snapshots or [],
+        "knowledge_snapshot_paths": snapshot_paths,
+        "source_path": source_path.relative_to(DATA_DIR).as_posix(),
+        "prompt_path": prompt_path.relative_to(DATA_DIR).as_posix(),
+        "section_path": source_path.relative_to(DATA_DIR).as_posix(),
+        "expected_revision": expected_revision,
+    }
+    write_text_file(job_path, json.dumps(job, ensure_ascii=False, indent=2) + "\n")
+    return job
+
+
+def _pi_job_response(user_id, job_id):
+    if not re.fullmatch(r"[0-9a-f-]{36}", job_id or ""):
+        return None
+    _, job_path, source_path, _ = _write_ai_job_paths(user_id, job_id)
+    if not job_path.exists():
+        return None
+    try:
+        job = json.loads(read_text_file(job_path))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if job.get("user_id") != user_id:
+        return None
+    if job.get("status") == "completed" and source_path.exists():
+        source = read_text_file(source_path)
+        match = re.search(r"<!-- jt:agent-session \{.*?\} -->\s*\n\s*(.*?)\s*\n\s*___\s*$", source, re.DOTALL)
+        if match:
+            job["response"] = _strip_write_ai_session_metadata(match.group(1)).strip()
+        else:
+            job.update(status="error", error="Pi-Antwort konnte nicht gelesen werden")
+    return job
+
+
 @app.route("/api/write-ai/draft", methods=["GET", "POST"])
 @require_auth
 def api_write_ai_draft():
@@ -1126,6 +1247,12 @@ def api_write_ai_draft():
     path = _write_draft_path(user["id"])
     if request.method == "GET":
         content = read_text_file(path) if path.exists() else ""
+        cleaned = _strip_write_ai_session_metadata(content)
+        if cleaned != content:
+            # Repair drafts produced by the old runner without exposing the
+            # hidden marker again after a refresh or device switch.
+            update_text_file(path, lambda _current: _strip_write_ai_session_metadata(_current))
+            content = cleaned
         return jsonify({"content": content, "revision": _draft_revision(content)})
     csrf_error = csrf_protect(lambda: None)()
     if csrf_error:
@@ -1134,6 +1261,7 @@ def api_write_ai_draft():
     content = data.get("content")
     if not isinstance(content, str) or len(content) > 200000:
         return jsonify({"error": "Draft content is invalid or too large"}), 400
+    content = _strip_write_ai_session_metadata(content)
     expected = data.get("revision")
     result = {}
     def save(current):
@@ -1155,31 +1283,44 @@ def api_write_ai_submit():
     """Run an explicit writing-tab hashtag request against the configured provider.
 
     The handler neither appends to a journal nor uses project/document context.
-    It accepts exactly today's private journal or the private temporary draft.
+    Any configured AI hashtag may be invoked here; it accepts exactly today's
+    private journal or the private temporary draft.
     """
     data = request.get_json(silent=True) or {}
     user = _current_user()
     uid = user["id"]
     tag = tagging_module.normalise_tag(data.get("workflow_tag", ""))
     workflow = tagging_module.catalog_view(uid).get("ai", {}).get(tag)
-    if not workflow or workflow.get("target", "document") != "write_tab":
-        return jsonify({"error": "Unbekanntes Schreiben-Tab-AI-Hashtag"}), 400
+    if not workflow:
+        return jsonify({"error": "Unbekanntes AI-Hashtag"}), 400
     context_type = data.get("context_type")
     if context_type not in {"draft", "today_journal"}:
         return jsonify({"error": "Bitte Kontext Aktuelles Textfeld oder Heutiges Journal wählen"}), 400
     submitted = data.get("text")
     if not isinstance(submitted, str) or not submitted.strip() or len(submitted) > 200000:
         return jsonify({"error": "Bitte einen gültigen Text eingeben"}), 400
+    submitted = _strip_write_ai_session_metadata(submitted)
+    try:
+        knowledge_snapshots = _knowledge_snapshots_for_write(uid, submitted)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     provider_id = str(data.get("provider_id") or workflow.get("provider_id") or "").strip()
-    config = load_config()
-    provider = next((item for item in config.get("ai_providers", []) if item.get("id") == provider_id), None)
-    if not provider:
-        return jsonify({"error": "Unbekannter AI-Anbieter"}), 400
-    model = str(data.get("model") or provider.get("model") or "").strip()
-    # Models are selected from the existing provider configuration, not supplied
-    # freely by the browser.
-    if not model or model != str(provider.get("model") or ""):
-        return jsonify({"error": "Unbekanntes Modell für diesen Anbieter"}), 400
+    is_host_pi = workflow.get("agent") == "pi" or provider_id == "__host_worker__"
+    provider = None
+    if is_host_pi:
+        model = str(workflow.get("model") or "").strip()
+        if not model:
+            return jsonify({"error": "Für den Pi-Workflow fehlt das Modell."}), 400
+    else:
+        config = load_config()
+        provider = next((item for item in config.get("ai_providers", []) if item.get("id") == provider_id), None)
+        if not provider:
+            return jsonify({"error": "Unbekannter AI-Anbieter"}), 400
+        model = str(data.get("model") or provider.get("model") or "").strip()
+        # Models are selected from the existing provider configuration, not supplied
+        # freely by the browser.
+        if not model or model != str(provider.get("model") or ""):
+            return jsonify({"error": "Unbekanntes Modell für diesen Anbieter"}), 400
 
     draft_path = _write_draft_path(uid)
     expected_revision = data.get("revision")
@@ -1201,7 +1342,20 @@ def api_write_ai_submit():
         context = read_text_file(journal_path) if journal_path.exists() else ""
     else:
         context = submitted
-    prompt = f"{workflow.get('prompt', '').strip()}\n\nKontext ({'heutiges Journal' if context_type == 'today_journal' else 'aktuelles Textfeld'}):\n{context}"
+    knowledge_context = "".join(
+        f"\n\nKnowledge-Quelle #{snapshot['tag']} ({snapshot['scope']}:{snapshot['path']}):\n{snapshot['content']}"
+        for snapshot in knowledge_snapshots
+    )
+    prompt = f"{workflow.get('prompt', '').strip()}\n\nKontext ({'heutiges Journal' if context_type == 'today_journal' else 'aktuelles Textfeld'}):\n{context}{knowledge_context}"
+    if is_host_pi:
+        if workflow.get("agent") != "pi":
+            return jsonify({"error": "Der Host-Worker unterstützt derzeit nur Pi-Workflows."}), 400
+        job = _queue_pi_write_job(uid, tag, workflow, context_type, submitted, context, knowledge_snapshots)
+        event = {"id": job["id"], "at": job["created_at"], "workflow_tag": tag,
+                 "agent": "pi", "model": job["model"], "context_type": context_type,
+                 "status": "queued"}
+        _append_write_ai_history(uid, event)
+        return jsonify({"ok": True, "queued": True, "job_id": job["id"], "status": "queued"}), 202
     event = {"id": str(uuid.uuid4()), "at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"), "workflow_tag": tag, "provider_id": provider_id, "model": model, "context_type": context_type, "status": "running"}
     _append_write_ai_history(uid, event)
     try:
@@ -1222,6 +1376,16 @@ def api_write_ai_submit():
     event.update({"status": "completed"})
     _append_write_ai_history(uid, event)
     return jsonify({"ok": True, "response": response, "content": result["content"], "revision": _draft_revision(result["content"]), "provider_id": provider_id, "model": model, "context_type": context_type})
+
+
+@app.route("/api/write-ai/jobs/<job_id>", methods=["GET"])
+@require_auth
+def api_write_ai_job(job_id):
+    job = _pi_job_response(_current_user()["id"], job_id)
+    if not job:
+        return jsonify({"error": "KI-Job nicht gefunden"}), 404
+    response = {key: job.get(key) for key in ("id", "status", "created_at", "started_at", "completed_at", "error", "response")}
+    return jsonify(response)
 
 
 def _write_ai_markdown(content, ai_response, time_str, mode="append", datetime_str=None):
@@ -1363,15 +1527,35 @@ def api_submit():
 
     write_to_journal = template_def.get("write_to_journal", True)
     target_file = template_def.get("target_file")
+    shopping_import = None
     # Family-Side-Effect: target_file → Task an Projekt-Datei anhaengen
     if target_file:
         title_val = values.get("titel") or values.get("item") or content or template_id
         user_uid = values.get("verantwortlich") or values.get("user") or uid
         target_date = values.get("target_date") or ""
-        # Einkaufsliste: mehrere Items (eine pro Zeile) als einzelne Tasks anlegen
-        if target_file.endswith("einkaufsliste.md") and values.get("item"):
-            lines = [l.strip().lstrip("-*•·").strip() for l in str(values["item"]).splitlines() if l.strip()]
-            for line in lines:
+        # Einkaufsliste: die Eingabe kann aus dem alten Formular oder aus dem
+        # normalen Schreiben-Editor kommen.  Jede Zeile wird ein eigener Punkt
+        # in der gemeinsamen Family-Einkaufsliste.
+        if target_file.endswith("einkaufsliste.md"):
+            shopping_input = values.get("item") or content
+            current_group = "Unsortiert"
+            lines = []
+            for raw_line in str(shopping_input).splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if re.fullmatch(r"#{1,6}\s+.+", line):
+                    heading = line.lstrip("#").strip()
+                    current_group = "Unsortiert" if heading.casefold() == "einkaufsliste" else heading
+                    continue
+                if line.startswith("**") and line.endswith("**") and len(line) > 4:
+                    current_group = line.strip("*").strip()
+                    continue
+                item = re.sub(r"^(?:[-*•·]|\d+[.)])\s*", "", line).strip()
+                if item:
+                    lines.append((current_group, item))
+            added_items = 0
+            for group, line in lines:
                 try:
                     family_module.append_task_to_target_file(
                         target_file=target_file,
@@ -1379,9 +1563,13 @@ def api_submit():
                         user_uid=str(user_uid).strip() if user_uid else "",
                         target_date="",
                         created_by=uid,
+                        group=group,
                     )
+                    added_items += 1
                 except Exception as e:
                     logger.error(f"Family append_task_to_target_file failed: {e}")
+                    return jsonify({"error": "Einkaufslistenpunkt konnte nicht gespeichert werden"}), 500
+            shopping_import = {"added_shopping_items": added_items}
         else:
             try:
                 family_module.append_task_to_target_file(
@@ -1432,6 +1620,8 @@ def api_submit():
         response = {"ok": True}
         if planner_id:
             response["planner_id"] = planner_id
+        if shopping_import:
+            response.update(shopping_import)
         return jsonify(response)
 
     filepath = _get_journal_path(now)
@@ -1457,7 +1647,10 @@ def api_submit():
         )
 
     logger.info("File written successfully")
-    return jsonify({"ok": True, "ai_sessions": ai_sessions})
+    response = {"ok": True, "ai_sessions": ai_sessions}
+    if shopping_import:
+        response.update(shopping_import)
+    return jsonify(response)
 
 
 @app.route("/api/dashboard/init", methods=["POST"])

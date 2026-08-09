@@ -1,14 +1,12 @@
-/* Private writing-tab AI workflow.  It augments, but does not replace, the
- * established generic KI-Modus. */
+/* Private writing-tab AI workflow.  In KI-Modus the #ai-… tag in the editor
+ * selects the workflow; no journal entry is created by this path. */
 (function () {
   let draftRevision = null;
   let draftTimer = null;
   let writeWorkflows = [];
 
   function editor() { return document.getElementById('simple-input'); }
-  function controls() { return document.getElementById('ai-controls'); }
-  function selectedWorkflow() { return document.getElementById('write-ai-workflow')?.value || ''; }
-  function isWritingMode() { return document.getElementById('template-select')?.value === '__ai_mode__' && Boolean(selectedWorkflow()); }
+  function isWritingMode() { return document.getElementById('template-select')?.value === '__ai_mode__'; }
   function safeShow(message, error) { if (typeof window.showToast === 'function') window.showToast(message, error); }
 
   async function loadDraft() {
@@ -36,41 +34,18 @@
       const res = await window.apiFetch('/api/brain/tag-catalog');
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return;
-      writeWorkflows = Object.entries(data.catalog?.ai || {}).filter(([, workflow]) => workflow.target === 'write_tab');
-      const select = document.getElementById('write-ai-workflow');
-      if (!select) return;
-      const previous = select.value;
-      select.replaceChildren(new Option('AI-Template wählen', ''));
-      writeWorkflows.forEach(([tag, workflow]) => select.add(new Option(`#${tag}${workflow.provider_id ? '' : ' (Anbieter wählen)'}`, tag)));
-      if (writeWorkflows.some(([tag]) => tag === previous)) select.value = previous;
-      if (!select.value && writeWorkflows.length === 1) select.value = writeWorkflows[0][0];
-    } catch (_) { /* Generic KI mode continues to work. */ }
+      // KI-Modus dispatches by the hashtag definition itself.  Existing
+      // document-session definitions remain valid here as well; this client
+      // path still uses the private draft endpoint and never saves a journal.
+      writeWorkflows = Object.entries(data.catalog?.ai || {});
+    } catch (_) { /* The submit handler shows a useful error if needed. */ }
   }
-  function renderControls() {
-    const parent = controls();
-    if (!parent || document.getElementById('write-ai-workflow')) return;
-    const wrapper = document.createElement('div');
-    wrapper.id = 'write-ai-controls';
-    wrapper.className = 'flex flex-nowrap gap-2 items-center shrink-0';
-    wrapper.innerHTML = '<select id="write-ai-workflow" aria-label="AI-Template" class="h-10 w-44 rounded-lg bg-gray-800/10 border border-gray-700/10 px-3 text-sm text-gray-100"><option>AI-Template wählen</option></select><select id="write-ai-model" aria-label="KI-Modell" class="h-10 w-36 rounded-lg bg-gray-800/10 border border-gray-700/10 px-3 text-sm text-gray-100"></select><select id="write-ai-context" aria-label="KI-Kontext" class="h-10 w-44 rounded-lg bg-gray-800/10 border border-gray-700/10 px-3 text-sm text-gray-100"><option value="draft">Aktuelles Textfeld</option><option value="today_journal">Heutiges Journal</option></select>';
-    parent.appendChild(wrapper);
-    wrapper.querySelector('#write-ai-workflow').addEventListener('change', syncWorkflowProvider);
-    document.getElementById('ai-provider-select')?.addEventListener('change', syncModel);
-    syncModel();
-    refreshWorkflows();
-  }
-  function syncWorkflowProvider() {
-    const workflow = writeWorkflows.find(([tag]) => tag === selectedWorkflow())?.[1];
-    const provider = document.getElementById('ai-provider-select');
-    if (workflow?.provider_id && provider) provider.value = workflow.provider_id;
-    syncModel();
-  }
-  function syncModel() {
-    const providerId = document.getElementById('ai-provider-select')?.value;
-    const provider = (window.config?.ai_providers || []).find((item) => item.id === providerId);
-    const model = document.getElementById('write-ai-model');
-    if (!model) return;
-    model.replaceChildren(new Option(provider?.model || 'Kein Modell', provider?.model || ''));
+  function workflowFromText(text) {
+    const tags = new Set();
+    for (const match of text.matchAll(/(?:^|[^\p{L}\p{N}_#])#([\p{L}\p{N}_-]+)/gu)) {
+      tags.add(match[1].normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('de-DE'));
+    }
+    return writeWorkflows.find(([tag]) => tags.has(tag));
   }
   function setBusy(busy) {
     const button = document.getElementById('submit-btn');
@@ -79,36 +54,86 @@
     button.disabled = busy;
     button.classList.toggle('write-ai-working', busy);
     button.setAttribute('aria-busy', String(busy));
-    button.textContent = busy ? 'KI arbeitet…' : 'An KI senden';
-    if (busy) { status.classList.remove('hidden'); status.textContent = 'KI arbeitet – du kannst weiter schreiben.'; }
+    button.textContent = busy ? 'KI arbeitet…' : 'KI Senden';
+    if (busy) { status.classList.remove('hidden'); status.textContent = 'KI-Anfrage wird vorbereitet – du kannst weiter schreiben.'; }
+  }
+
+  function activateWritingMode() {
+    const writeTab = document.getElementById('tab-write');
+    const select = document.getElementById('template-select');
+    if (!select || writeTab?.classList.contains('hidden')) return false;
+    if (select.value !== '__ai_mode__') {
+      select.value = '__ai_mode__';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    editor()?.focus({ preventScroll: true });
+    safeShow('KI-Modus aktiviert');
+    return true;
+  }
+  async function waitForHostJob(jobId) {
+    const status = document.getElementById('ai-response-area');
+    for (let attempt = 0; attempt < 360; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const response = await window.apiFetch(`/api/write-ai/jobs/${encodeURIComponent(jobId)}`);
+      const job = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(job.error || 'KI-Job konnte nicht gelesen werden.');
+      if (job.status === 'completed') return job.response || '';
+      if (job.status === 'error') throw new Error(job.error || 'Pi-Job fehlgeschlagen.');
+      if (status) status.textContent = job.status === 'running'
+        ? 'Pi arbeitet – du kannst weiter schreiben.'
+        : 'Wartet auf Host-Worker – du kannst weiter schreiben.';
+    }
+    throw new Error('Pi-Job hat das Zeitlimit überschritten.');
   }
   async function submitWritingAi() {
     const field = editor();
-    const provider = document.getElementById('ai-provider-select');
-    const workflow = writeWorkflows.find(([tag]) => tag === selectedWorkflow())?.[1];
-    if (!field?.value.trim() || !workflow || !provider?.value) { safeShow('Bitte AI-Template, Anbieter und Text wählen.', true); return; }
+    if (!field?.value.trim()) { safeShow('Bitte Text eingeben.', true); return; }
+    await refreshWorkflows();
+    const selected = workflowFromText(field.value);
+    if (!selected) { safeShow('Bitte einen konfigurierten #ai-Hashtag in den Text schreiben.', true); return; }
+    const [workflowTag, workflow] = selected;
+    const useHostWorker = workflow.agent === 'pi' || workflow.provider_id === '__host_worker__';
+    const provider = (window.config?.ai_providers || []).find((item) => item.id === workflow.provider_id)
+      || (window.config?.ai_providers || []).find((item) => item.model === workflow.model);
+    if (!useHostWorker && !provider) { safeShow(`Für #${workflowTag} ist kein passender KI-Anbieter konfiguriert.`, true); return; }
     clearTimeout(draftTimer);
     await saveDraft();
     const snapshot = field.value;
     setBusy(true);
     try {
-      const res = await window.apiFetch('/api/write-ai/submit', { method: 'POST', body: JSON.stringify({ workflow_tag: selectedWorkflow(), provider_id: provider.value, model: document.getElementById('write-ai-model')?.value || '', context_type: document.getElementById('write-ai-context').value, text: snapshot, revision: draftRevision }) });
+      const res = await window.apiFetch('/api/write-ai/submit', { method: 'POST', body: JSON.stringify({ workflow_tag: workflowTag, provider_id: useHostWorker ? '__host_worker__' : provider.id, model: useHostWorker ? workflow.model : provider.model, context_type: 'draft', text: snapshot, revision: draftRevision }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { safeShow(data.error || 'KI-Anfrage fehlgeschlagen.', true); return; }
+      if (data.queued) {
+        data.response = await waitForHostJob(data.job_id);
+        data.content = data.response;
+      }
       // Never discard keystrokes made while the request was running.
       const localChanged = field.value !== snapshot;
       const merged = localChanged ? `${data.response}\n\n${field.value}` : data.content;
       field.value = merged;
-      draftRevision = data.revision;
-      if (localChanged) await saveDraft();
+      // Persist both the result and any keystrokes made while Pi was running.
+      // The revision-aware draft endpoint prevents a second device from being
+      // overwritten if it saved in the meantime.
+      if (data.revision) draftRevision = data.revision;
+      await saveDraft();
       const status = document.getElementById('ai-response-area');
       status.classList.remove('hidden'); status.textContent = 'KI-Ergebnis in den temporären Schreibstand übernommen.';
       safeShow('KI-Antwort übernommen');
-    } catch (_) { safeShow('Netzwerkfehler – dein Text bleibt erhalten.', true); }
+    } catch (error) {
+      const message = error?.message || 'Netzwerkfehler – dein Text bleibt erhalten.';
+      const status = document.getElementById('ai-response-area');
+      if (status) { status.classList.remove('hidden'); status.textContent = `KI-Fehler: ${message}`; }
+      safeShow(message, true);
+    }
     finally { setBusy(false); }
   }
 
   document.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.altKey && !event.shiftKey && event.code === 'KeyK') {
+      if (activateWritingMode()) event.preventDefault();
+      return;
+    }
     const field = event.target;
     if (event.key !== 'Tab' || field !== editor()) return;
     event.preventDefault();
@@ -122,11 +147,13 @@
     if (typeof window.handleAiMode !== 'function' || typeof window.handleSubmit !== 'function') return;
     clearInterval(waitForPage);
     const oldAiMode = window.handleAiMode;
-    window.handleAiMode = function () { oldAiMode(); renderControls(); refreshWorkflows(); document.getElementById('submit-btn').textContent = isWritingMode() ? 'An KI senden' : 'KI senden'; };
+    window.handleAiMode = function () { oldAiMode(); refreshWorkflows(); document.getElementById('submit-btn').textContent = isWritingMode() ? 'KI Senden' : 'Senden'; };
     const oldTemplateChange = window.handleTemplateChange;
     window.handleTemplateChange = function (template) { oldTemplateChange(template); };
     const oldSubmit = window.handleSubmit;
     window.handleSubmit = function () { return isWritingMode() ? submitWritingAi() : oldSubmit(); };
+    const select = document.getElementById('template-select');
+    if (select) select.title = 'Template wählen · KI-Modus: Ctrl/⌘ + Alt/⌥ + K';
     loadDraft();
   }, 25);
 })();

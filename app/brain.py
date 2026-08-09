@@ -19,7 +19,7 @@ import fcntl
 import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from flask import Blueprint, jsonify, request
 import family as family_module
@@ -1309,6 +1309,88 @@ def _resolve_document(user_id, doc_id):
     return document, path, root, content
 
 
+def _safe_knowledge_path(root, relative):
+    """Resolve a selectable Markdown source without allowing path escapes.
+
+    Knowledge sources intentionally exclude journals, drafts and implementation
+    files.  They are limited to normal Notes and Projects and are read from the
+    resolved path after the containment check, so a final symlink can never be
+    used as an escape hatch.
+    """
+    if not isinstance(relative, str) or not relative or len(relative) > 240 or "\\" in relative:
+        return None, None
+    candidate_relative = PurePosixPath(relative)
+    if (
+        candidate_relative.is_absolute() or ".." in candidate_relative.parts
+        or candidate_relative.suffix != ".md" or candidate_relative.as_posix() != relative
+        or not candidate_relative.parts or candidate_relative.parts[0] not in {"notes", "projects"}
+    ):
+        return None, None
+    candidate = root / relative
+    try:
+        if candidate.is_symlink() or not candidate.is_file() or _is_technical_file(candidate, root):
+            return None, None
+        resolved_root = root.resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(resolved_root)
+        if not resolved.is_file() or resolved.suffix != ".md":
+            return None, None
+    except (OSError, ValueError):
+        return None, None
+    return candidate, resolved
+
+
+def resolve_knowledge_source(user_id, scope, relative):
+    """Read one current, permitted knowledge source for an explicit AI job.
+
+    This is deliberately independent of the Brain index: file existence and
+    Family visibility are rechecked at submit time, immediately before the
+    immutable job snapshot is created.
+    """
+    if scope == "personal":
+        root = _user_root(user_id)
+    elif scope == "family":
+        root = FAMILY_DIR
+    else:
+        raise ValueError("Unknown knowledge source scope")
+    candidate, resolved = _safe_knowledge_path(root, relative)
+    if not candidate:
+        raise ValueError("Knowledge source is missing or uses an unsafe path")
+    content = _read_text(resolved)
+    if content is None:
+        raise ValueError("Knowledge source is unavailable")
+    if scope == "family":
+        visible, _ = _family_visibility(resolved, relative, user_id, content)
+        if not visible:
+            raise ValueError("Knowledge source is no longer visible to this user")
+    return {"scope": scope, "path": relative, "content": content}
+
+
+def knowledge_source_options(user_id):
+    """Return only existing Notes/Projects the caller can actually read."""
+    options = []
+    personal_root = _user_root(user_id)
+    for path in _iter_markdown(personal_root):
+        relative = _relative_path(personal_root, path)
+        if not relative or _personal_kind(relative) not in {"note", "project"}:
+            continue
+        candidate, _ = _safe_knowledge_path(personal_root, relative)
+        if candidate:
+            options.append({"scope": "personal", "path": relative, "label": relative})
+    for path in _iter_markdown(FAMILY_DIR):
+        relative = _relative_path(FAMILY_DIR, path)
+        if not relative or not (relative.startswith("notes/") or relative.startswith("projects/")):
+            continue
+        candidate, resolved = _safe_knowledge_path(FAMILY_DIR, relative)
+        if not candidate:
+            continue
+        content = _read_text(resolved)
+        visible, _ = _family_visibility(resolved, relative, user_id, content)
+        if visible:
+            options.append({"scope": "family", "path": relative, "label": relative})
+    return sorted(options, key=lambda item: (item["scope"], item["path"].casefold()))
+
+
 def _query_terms(query):
     required = []
     excluded = []
@@ -2175,6 +2257,7 @@ def brain_tag_catalog():
     if request.method == "GET":
         return jsonify({
             "catalog": tagging_module.catalog_view(user["id"]),
+            "knowledge_source_options": knowledge_source_options(user["id"]),
             "can_manage": _is_admin(user),
             "can_manage_personal": True,
             "can_manage_family": _is_admin(user),
@@ -2193,6 +2276,22 @@ def brain_tag_catalog():
             return jsonify({"error": str(exc)}), 400
         enqueue_rebuild(user["id"])
         return jsonify({"ok": True, "workflow": catalog})
+    if data.get("scope") == "knowledge":
+        family = (data.get("source") or {}).get("family") is True
+        if family and not _is_admin(user):
+            return jsonify({"error": "Admin access is required for Family knowledge sources"}), 403
+        try:
+            source = dict(data.get("source") or {})
+            source.pop("family", None)
+            if data.get("action") == "save":
+                # Never trust a path selected in the browser.  This also makes
+                # catalog entries fail closed when a file was deleted or lost
+                # its Family permission between selection and save.
+                resolve_knowledge_source(user["id"], "family" if family else "personal", source.get("path"))
+            result = tagging_module.update_knowledge_source(user["id"], family, data.get("action"), data.get("tag"), source)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "source": result})
     if data.get("scope") not in {"personal", "family"}:
         return jsonify({"error": "Unknown hashtag scope"}), 400
     if data.get("scope") == "family" and not _is_admin(user):

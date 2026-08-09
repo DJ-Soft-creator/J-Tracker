@@ -24,14 +24,14 @@ class HistoricalTaggingTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_uses_configured_prompts_and_replaces_placeholders(self):
-        path = self.root / "test-user/2026/08/04/Journal_2026-08-04.md"
+        path = self.root / "alex/2026/08/04/Journal_2026-08-04.md"
         path.parent.mkdir(parents=True)
         path.write_text(
             "# Journal\n\n___\n\n"
             "## Note | Datum & Uhrzeit: 2026-08-04 12:00:00\nA thought\n\n___\n",
             encoding="utf-8",
         )
-        tagging.update_catalog("test-user", False, "approve", "focus")
+        tagging.update_catalog("alex", False, "approve", "focus")
         captured = {}
 
         def call_ai(provider, ai_function, user_prompt):
@@ -39,7 +39,7 @@ class HistoricalTaggingTests(unittest.TestCase):
             return '{"blocks":{"2026-08-04 12:00:00":["focus"]},"proposed_tags":[]}'
 
         report = historical_tagging.run_historical_tagging(
-            "test-user",
+            "alex",
             "2026-08-04",
             "2026-08-04",
             {"id": "lm_test"},
@@ -80,7 +80,7 @@ class HistoricalTaggingTests(unittest.TestCase):
         self.assertEqual(report["proposals"], [])
 
     def test_rejects_partial_classification_without_rewriting_journal(self):
-        path = self.root / "test-user/2026/08/04/Journal_2026-08-04.md"
+        path = self.root / "alex/2026/08/04/Journal_2026-08-04.md"
         path.parent.mkdir(parents=True)
         original = (
             "# Journal\n\n___\n\n"
@@ -90,7 +90,7 @@ class HistoricalTaggingTests(unittest.TestCase):
         path.write_text(original, encoding="utf-8")
 
         report = historical_tagging.run_historical_tagging(
-            "test-user",
+            "alex",
             "2026-08-04",
             "2026-08-04",
             {"id": "lm_test"},
@@ -107,7 +107,7 @@ class HistoricalTaggingTests(unittest.TestCase):
         self.assertEqual(path.read_text(encoding="utf-8"), original)
 
     def test_rejects_duplicate_timestamps_before_calling_model(self):
-        path = self.root / "test-user/2026/08/04/Journal_2026-08-04.md"
+        path = self.root / "alex/2026/08/04/Journal_2026-08-04.md"
         path.parent.mkdir(parents=True)
         original = (
             "___\n\n## First | Datum & Uhrzeit: 2026-08-04 12:00:00\nFirst\n\n___\n\n"
@@ -122,7 +122,7 @@ class HistoricalTaggingTests(unittest.TestCase):
             return "{}"
 
         report = historical_tagging.run_historical_tagging(
-            "test-user", "2026-08-04", "2026-08-04", {"id": "lm_test"},
+            "alex", "2026-08-04", "2026-08-04", {"id": "lm_test"},
             {
                 "system_prompt": "System",
                 "user_prompt_template": "{canonical_tags_json}\n{journal_body}",
@@ -137,7 +137,7 @@ class HistoricalTaggingTests(unittest.TestCase):
     def test_requires_both_user_prompt_placeholders(self):
         with self.assertRaisesRegex(ValueError, "canonical_tags_json"):
             historical_tagging.run_historical_tagging(
-                "test-user", "2026-08-04", "2026-08-04", {"id": "lm_test"},
+                "alex", "2026-08-04", "2026-08-04", {"id": "lm_test"},
                 {"system_prompt": "System", "user_prompt_template": "Only {journal_body}"},
                 lambda *_: "",
             )
@@ -152,7 +152,7 @@ class HistoricalTaggingTests(unittest.TestCase):
             historical_tagging._parse_model_response(response)
 
     def test_prompt_and_schema_exclude_unrecognised_timestamps(self):
-        path = self.root / "test-user/2026/08/04/Journal_2026-08-04.md"
+        path = self.root / "alex/2026/08/04/Journal_2026-08-04.md"
         path.parent.mkdir(parents=True)
         path.write_text(
             "# Journal\n\n___\n\n"
@@ -169,7 +169,7 @@ class HistoricalTaggingTests(unittest.TestCase):
             return '{"blocks":{"2026-08-04 12:00:00":[]},"proposed_tags":[]}'
 
         report = historical_tagging.run_historical_tagging(
-            "test-user", "2026-08-04", "2026-08-04", {"id": "lm_test"},
+            "alex", "2026-08-04", "2026-08-04", {"id": "lm_test"},
             {
                 "system_prompt": "System",
                 "user_prompt_template": "{canonical_tags_json}\n{journal_body}",

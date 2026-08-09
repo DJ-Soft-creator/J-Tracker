@@ -157,8 +157,14 @@
     .journal-ai-tag { color: #bae6fd; }
     .journal-ai-text { color: #bae6fd; }
     .brain-family-entry { border-color: rgba(244, 114, 182, 0.35); background-color: rgba(131, 24, 67, 0.16); }
-    @keyframes writeAiGlow { 0%, 100% { box-shadow: 0 0 0 rgba(96,165,250,0); } 50% { box-shadow: 0 0 16px rgba(96,165,250,.75); } }
-    .write-ai-working { animation: writeAiGlow 2.4s ease-in-out infinite; }
+    @keyframes writeAiGlow {
+      0%, 100% { box-shadow: 0 0 5px rgba(255,255,255,.12), 0 0 10px rgba(74,222,128,.16); }
+      50% { box-shadow: 0 0 12px rgba(255,255,255,.48), 0 0 24px rgba(74,222,128,.44); }
+    }
+    .write-ai-working { animation: writeAiGlow 6s cubic-bezier(.4, 0, .6, 1) infinite; }
+    @media (prefers-reduced-motion: reduce) {
+      .write-ai-working { animation: none; box-shadow: 0 0 10px rgba(74,222,128,.35); }
+    }
     /* Presentation-only DEV paint override; application data paths stay untouched. */
     html.youtube-mode, .youtube-mode body { background: #030712 !important; }
     .youtube-mode .bg-red-950 { background-color: #030712 !important; }
@@ -259,14 +265,14 @@
 
         <!-- All write actions share one stable row; only status text is rendered below. -->
         <div class="desktop-controls px-6 py-3">
-          <div class="flex flex-nowrap gap-2 items-center w-full max-w-5xl mx-auto overflow-x-auto">
+          <div class="flex flex-nowrap justify-center gap-2 items-center w-full max-w-5xl mx-auto overflow-visible">
             <div id="input-resize-controls" class="shrink-0">
               <button type="button" class="input-resize-handle" data-resize-axis="xy"
                       aria-label="Größe des Eingabebereichs ändern" title="Ziehen, um Breite und Höhe anzupassen">
                 <span class="input-resize-icon" aria-hidden="true">↘</span>
               </button>
             </div>
-            <select id="template-select" class="h-10 flex-1 basis-48 min-w-40 rounded-lg bg-gray-800/10 border border-gray-700/10 px-3 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none"></select>
+            <select id="template-select" class="h-10 flex-none w-36 min-w-0 rounded-lg bg-gray-800/10 border border-gray-700/10 px-3 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none"></select>
             <button id="submit-btn" onclick="handleSubmit()" class="h-10 bg-green-600/70 hover:bg-green-500 text-white font-semibold px-5 rounded-lg transition text-sm shrink-0">
               Senden
             </button>
@@ -842,8 +848,11 @@
       simpleInput.style.display = '';
       formContainer.innerHTML = '';
       formContainer.style.display = 'none';
-      document.getElementById('ai-controls').classList.remove('hidden');
-      document.getElementById('submit-btn').textContent = 'KI senden';
+      // The AI mode is controlled by an #ai-… hashtag in the text itself.
+      // Do not expose the generic provider/function controls here: those use
+      // the legacy endpoint which may persist a journal entry.
+      document.getElementById('ai-controls').classList.add('hidden');
+      document.getElementById('submit-btn').textContent = 'KI Senden';
       renderProjectSelector(null);
       updateAppInfoBox();
     }
@@ -856,7 +865,11 @@
 
       document.getElementById('ai-controls').classList.add('hidden');
       document.getElementById('ai-response-area').classList.add('hidden');
-      document.getElementById('submit-btn').textContent = 'Senden';
+      const isShoppingList = template.id === 'einkaufsliste';
+      document.getElementById('submit-btn').textContent = isShoppingList ? 'Übernehmen' : 'Senden';
+      simpleInput.placeholder = isShoppingList
+        ? 'Sortierte Einkaufsliste einfügen – Überschriften mit ##, Artikel je Zeile'
+        : 'Notiz eingeben...';
 
       if (template.type === 'simple') {
         simpleInput.style.display = '';
@@ -885,78 +898,11 @@
       const isAiMode = document.getElementById('template-select').value === AI_MODE_ID;
 
       if (isAiMode) {
-        const providerId = document.getElementById('ai-provider-select').value;
-        const functionId = document.getElementById('ai-function-select').value;
-        const userMessage = document.getElementById('simple-input').value.trim();
-
-        if (!userMessage) {
-          showToast('Bitte Text eingeben', true);
-          return;
-        }
-        if (!providerId || !functionId) {
-          showToast('Bitte Provider und Funktion wählen', true);
-          return;
-        }
-
-        const submitBtn = document.getElementById('submit-btn');
-        const responseArea = document.getElementById('ai-response-area');
-
-        submitBtn.disabled = true;
-        submitBtn.textContent = '...';
-        submitBtn.classList.add('opacity-60', 'cursor-not-allowed');
-        responseArea.classList.remove('hidden');
-        responseArea.innerHTML = '<span class="text-blue-400 animate-pulse">KI wird abgefragt...</span>';
-
-        try {
-          const res = await apiFetch('/api/ai-submit', {
-            method: 'POST',
-            body: JSON.stringify({
-              ai_provider_id: providerId,
-              ai_function_id: functionId,
-              text: userMessage
-            })
-          });
-
-          if (res.ok) {
-            const data = await res.json();
-            const mode = data.mode || 'append';
-            const textarea = document.getElementById('simple-input');
-            if (mode === 'replace') {
-              textarea.value = data.response;
-            } else {
-              textarea.value = userMessage + '\n\n' + data.response;
-            }
-            responseArea.innerHTML = `<span class="text-blue-300 font-medium">KI-Antwort:</span>\n${escapeHtml(data.response)}`;
-            showToast('KI-Antwort verarbeitet ✅');
-            if (typeof window.refreshWriteHashtagCatalog === 'function') window.refreshWriteHashtagCatalog();
-          } else if (res.status === 409) {
-            const err = await res.json();
-            responseArea.innerHTML = `<span class="text-red-400">Fehler: ${escapeHtml(err.error)}</span>`;
-            showToast('Konflikt: ' + err.error, true);
-          } else {
-            let errText = 'Unbekannter Fehler';
-            const contentType = res.headers.get('content-type') || '';
-            if (contentType.includes('application/json')) {
-              try {
-                const err = await res.json();
-                errText = err.error || JSON.stringify(err);
-              } catch {}
-            } else {
-              try {
-                errText = (await res.text()).slice(0, 500).replace(/</g, '&lt;').replace(/>/g, '&gt;');
-              } catch {}
-            }
-            responseArea.innerHTML = `<span class="text-red-400">Fehler: ${escapeHtml(errText)}</span>`;
-            showToast('KI-Fehler', true);
-          }
-        } catch (err) {
-          responseArea.innerHTML = `<span class="text-red-400">Netzwerkfehler: ${escapeHtml(err.message)}</span>`;
-          showToast('Netzwerkfehler', true);
-        } finally {
-          submitBtn.disabled = false;
-          submitBtn.textContent = 'KI senden';
-          submitBtn.classList.remove('opacity-60', 'cursor-not-allowed');
-        }
+        // write-ai.js replaces this handler with the hashtag-based workflow.
+        // This fallback intentionally never calls /api/ai-submit, because that
+        // legacy route can write to a journal.
+        showToast('Bitte kurz warten, bis der KI-Modus bereit ist.', true);
+        return;
       } else {
         // Normal template mode
         const selectedId = document.getElementById('template-select').value;
@@ -1007,13 +953,16 @@
           });
 
           if (res.ok) {
-            showToast('Gespeichert! ✅');
+            showToast(template.id === 'einkaufsliste' ? 'Einkaufsliste übernommen ✅' : 'Gespeichert! ✅');
             if (typeof window.refreshWriteHashtagCatalog === 'function') window.refreshWriteHashtagCatalog();
-            if (!template.keep_template_after_submit) {
+            // Nach jedem normalen Template zurück zu „Schnell“ wechseln.
+            // Der KI-Modus verwendet seinen eigenen Submit-Handler und bleibt
+            // deshalb bewusst unverändert ausgewählt.
+            if (template.id !== 'schnell') {
               document.getElementById('template-select').value = 'schnell';
               handleTemplateChange(config.templates.find(t => t.id === 'schnell'));
             }
-            // keep template selected, clear only the input content with animation
+            // Die gerade übermittelten Felder anschließend leeren.
             if (template.type === 'simple') {
               const textarea = document.getElementById('simple-input');
               textarea.classList.add('wipe-out');
@@ -1259,6 +1208,7 @@
     // ─── keyboard shortcut: Cmd/Ctrl+Enter to submit ────────────────
     document.getElementById('simple-input').addEventListener('keydown', (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
         handleSubmit();
       }
     });
@@ -1278,9 +1228,9 @@
       if (!appInfoBox) return;
       const isAiMode = document.getElementById('template-select').value === AI_MODE_ID;
       if (isAiMode) {
-        appInfoBox.textContent = 'KI-Modus aktiv: Text eingeben und "KI senden" klicken oder Cmd+Enter drücken.';
+        appInfoBox.textContent = 'KI-Modus aktiv: Text mit #ai-Hashtag eingeben und "KI Senden" klicken. Shortcut: Ctrl/⌘ + Alt/⌥ + K.';
       } else {
-        appInfoBox.textContent = 'Text eingeben und "Senden" klicken oder Cmd+Enter drücken.';
+        appInfoBox.textContent = 'Text eingeben und "Senden" klicken oder Cmd+Enter drücken. KI-Modus: Ctrl/⌘ + Alt/⌥ + K.';
       }
     }
     updateAppInfoBox();
@@ -1499,12 +1449,14 @@
             <div class="flex items-center gap-2">
               ${isRecurring
                 ? '<button type="button" onclick="openPlanner()" class="text-green-500 hover:text-green-400 text-xs">Pläne verwalten</button>'
-                : `<button type="button" onclick="openEditor('${escapeHtmlAttr(p.id)}','${isShopping ? 'compact' : 'full'}')" class="text-green-500 hover:text-green-400 text-xs" title="Bearbeiten">✏️</button>`}
-              ${isShopping && config && config.shopping_ai && config.shopping_ai.ai_provider_id ? `<button onclick="aiShoppingSuggest('${escapeHtmlAttr(p.id)}', this)" class="text-purple-400 hover:text-purple-300 text-xs" title="AI Liste sortieren">🤖</button>` : ''}
+                : `${isShopping ? `<button type="button" onclick="cleanShoppingList('${escapeHtmlAttr(p.id)}')" class="text-gray-400 hover:text-red-400 text-xs" title="Abgehakte Artikel entfernen oder leere Liste">🧹 Bereinigen</button>` : ''}<button type="button" onclick="openEditor('${escapeHtmlAttr(p.id)}','${isShopping ? 'compact' : 'full'}')" class="text-green-500 hover:text-green-400 text-xs" title="Bearbeiten">✏️</button>`}
             </div>
           </div>
           <div class="space-y-1.5">`;
         const tasks = [...(p.tasks || [])].sort((a, b) => {
+          const aOrder = Number.isFinite(Number(a.sort_index)) ? Number(a.sort_index) : Number.MAX_SAFE_INTEGER;
+          const bOrder = Number.isFinite(Number(b.sort_index)) ? Number(b.sort_index) : Number.MAX_SAFE_INTEGER;
+          if (aOrder !== bOrder) return aOrder - bOrder;
           if (Boolean(a.completed) !== Boolean(b.completed)) return a.completed ? 1 : -1;
           return (a.target_date || '9999-12-31').localeCompare(b.target_date || '9999-12-31');
         });
@@ -1686,6 +1638,36 @@
       } catch {
         checkbox.checked = !checkbox.checked;
         checkbox.disabled = false;
+        showToast('Netzwerkfehler', true);
+      }
+    }
+
+    async function cleanShoppingList(projectId) {
+      const project = familyData.find(item => item.id === projectId);
+      const completedCount = (project?.tasks || []).filter(task => task.completed).length;
+      const totalCount = (project?.tasks || []).length;
+      if (!totalCount) {
+        showToast('Die Einkaufsliste ist bereits leer.');
+        return;
+      }
+      const clearAll = completedCount === 0;
+      const confirmation = clearAll
+        ? `Es gibt keine abgehakten Artikel. Wirklich alle ${totalCount} Artikel endgültig entfernen?`
+        : `${completedCount} abgehakte${completedCount === 1 ? 'n Artikel' : ' Artikel'} endgültig entfernen?`;
+      if (!window.confirm(confirmation)) return;
+      try {
+        const res = await apiFetch('/api/family/project/' + projectId + '/shopping-clean', {
+          method: 'POST',
+          body: JSON.stringify({ clear_all: clearAll })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showToast('Fehler: ' + (data.error || res.status), true);
+          return;
+        }
+        showToast(data.removed ? `${data.removed} Artikel entfernt ✅` : 'Die Einkaufsliste ist bereits leer.');
+        loadFamily();
+      } catch {
         showToast('Netzwerkfehler', true);
       }
     }
@@ -2261,8 +2243,8 @@
   </script>
   <script src="{{ url_for('static', filename='planner.js') }}"></script>
   <script src="{{ url_for('static', filename='journal-highlighting.js', v='20260808-4') }}"></script>
-  <script src="{{ url_for('static', filename='brain.js', v='20260808-9') }}"></script>
-  <script src="{{ url_for('static', filename='write-hashtags.js', v='20260808-3') }}"></script>
-  <script src="{{ url_for('static', filename='write-ai.js', v='20260808-1') }}"></script>
+  <script src="{{ url_for('static', filename='brain.js', v='20260809-11') }}"></script>
+  <script src="{{ url_for('static', filename='write-hashtags.js', v='20260809-5') }}"></script>
+  <script src="{{ url_for('static', filename='write-ai.js', v='20260809-8') }}"></script>
 </body>
 </html>

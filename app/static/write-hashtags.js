@@ -26,11 +26,30 @@
     return (value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('de-DE');
   }
 
+  function candidateMatchScore(name, query) {
+    if (!query) return 0;
+    const normalisedName = normalisePartial(name);
+    if (normalisedName === query) return 0;
+    if (normalisedName.startsWith(query)) return 1;
+    if (normalisedName.split('-').some((part) => part.startsWith(query))) return 2;
+    const position = normalisedName.indexOf(query);
+    return position === -1 ? null : 3 + (position / Math.max(normalisedName.length, 1));
+  }
+
   function catalogCandidates() {
     if (!catalog) return [];
     const candidates = new Map();
     for (const tag of Object.keys(catalog.ai || {})) {
       candidates.set(tag, { name: tag, status: 'ai', family: false });
+    }
+    // Knowledge tags are explicit opt-in context sources.  They need to be
+    // selectable like the other tags, but their special visual status must not
+    // imply that ordinary approved/proposed hashtags become AI context.
+    for (const scope of ['personal', 'family']) {
+      const sources = catalog.knowledge?.[scope] || {};
+      for (const tag of Object.keys(sources)) {
+        candidates.set(tag, { name: tag, status: 'knowledge', family: scope === 'family' });
+      }
     }
     for (const scope of ['personal', 'family']) {
       const section = catalog[scope] || {};
@@ -154,15 +173,15 @@
       const selected = index === state.selectedIndex;
       button.type = 'button';
       button.className = `flex w-full items-center justify-between gap-3 rounded px-3 py-2 text-left text-sm transition ${selected
-        ? (suggestion.status === 'ai' ? 'bg-sky-500/15 text-sky-200' : (suggestion.family ? 'bg-pink-500/15 text-pink-200' : (suggestion.status === 'approved' ? 'bg-green-500/15 text-green-200' : 'bg-amber-500/15 text-amber-200')))
-        : (suggestion.status === 'ai' ? 'text-sky-200 hover:bg-sky-500/10' : (suggestion.family ? 'text-pink-200 hover:bg-pink-500/10' : 'text-gray-200 hover:bg-gray-800'))}`;
+        ? (suggestion.status === 'ai' ? 'bg-sky-500/15 text-sky-200' : (suggestion.status === 'knowledge' ? 'bg-violet-500/15 text-violet-200' : (suggestion.family ? 'bg-pink-500/15 text-pink-200' : (suggestion.status === 'approved' ? 'bg-green-500/15 text-green-200' : 'bg-amber-500/15 text-amber-200'))))
+        : (suggestion.status === 'ai' ? 'text-sky-200 hover:bg-sky-500/10' : (suggestion.status === 'knowledge' ? 'text-violet-200 hover:bg-violet-500/10' : (suggestion.family ? 'text-pink-200 hover:bg-pink-500/10' : 'text-gray-200 hover:bg-gray-800')))}`;
       button.setAttribute('role', 'option');
       button.setAttribute('aria-selected', String(selected));
       button.textContent = `#${suggestion.name}`;
 
       const status = document.createElement('span');
-      status.className = suggestion.status === 'ai' ? 'text-xs text-sky-300' : (suggestion.family ? 'text-xs text-pink-300' : (suggestion.status === 'approved' ? 'text-xs text-green-400' : 'text-xs text-amber-400'));
-      status.textContent = suggestion.status === 'ai' ? 'AI-Workflow' : (suggestion.family ? 'Familie' : (suggestion.status === 'approved' ? 'Freigegeben' : 'Vorschlag'));
+      status.className = suggestion.status === 'ai' ? 'text-xs text-sky-300' : (suggestion.status === 'knowledge' ? 'text-xs text-violet-300' : (suggestion.family ? 'text-xs text-pink-300' : (suggestion.status === 'approved' ? 'text-xs text-green-400' : 'text-xs text-amber-400')));
+      status.textContent = suggestion.status === 'ai' ? 'AI-Workflow' : (suggestion.status === 'knowledge' ? `Knowledge-Quelle${suggestion.family ? ' · Familie' : ''}` : (suggestion.family ? 'Familie' : (suggestion.status === 'approved' ? 'Freigegeben' : 'Vorschlag')));
       button.appendChild(status);
       button.addEventListener('mousedown', (event) => event.preventDefault());
       button.addEventListener('click', () => selectSuggestion(state, suggestion));
@@ -182,7 +201,10 @@
     }
     state.token = token;
     state.suggestions = catalogCandidates()
-      .filter((candidate) => normalisePartial(candidate.name).startsWith(token.query))
+      .map((candidate) => ({ candidate, score: candidateMatchScore(candidate.name, token.query) }))
+      .filter((entry) => entry.score !== null)
+      .sort((left, right) => left.score - right.score || left.candidate.name.localeCompare(right.candidate.name, 'de'))
+      .map((entry) => entry.candidate)
       .slice(0, MAX_SUGGESTIONS);
     if (!state.suggestions.length) {
       closeMenu();

@@ -101,6 +101,26 @@ class PwaAssetTests(unittest.TestCase):
             self.assertIn('id="submit-btn" onclick="handleSubmit()" class="h-10', template)
             self.assertIn('id="ai-controls" class="hidden flex flex-nowrap', template)
 
+    def test_private_ai_draft_is_scoped_to_ai_mode(self):
+        write_ai = (ROOT_DIR / "app" / "static" / "write-ai.js").read_text(encoding="utf-8")
+
+        self.assertIn("if (!isWritingMode()) return;", write_ai)
+        self.assertIn("if (!isWritingMode() || !field || draftRevision === null) return;", write_ai)
+        self.assertIn("event.target === editor() && isWritingMode()", write_ai)
+        self.assertIn("refreshWorkflows();\n      loadDraft();", write_ai)
+        self.assertNotIn("if (select) select.title = 'Template wählen · KI-Modus: Ctrl/⌘ + Alt/⌥ + K';\n    loadDraft();", write_ai)
+
+    def test_normal_submit_only_clears_the_text_that_was_sent(self):
+        for template_name in ("desktop.html", "index.html"):
+            template = (ROOT_DIR / "app" / "templates" / template_name).read_text(encoding="utf-8")
+            self.assertIn("let submittedSimpleValue = null;", template)
+            self.assertIn("textarea.value === submittedSimpleValue", template)
+            self.assertIn("const submittedFormValues = new Map();", template)
+            self.assertIn("Gespeichert – neuer Text bleibt im Eingabefeld.", template)
+            self.assertIn("const normalSubmissionClearKey = 'journl:clear-submitted-write-input';", template)
+            self.assertIn("rememberSuccessfulNormalSubmission();", template)
+            self.assertIn("sessionStorage.removeItem(normalSubmissionClearKey)", template)
+
     def test_manifest_has_expected_metadata(self):
         manifest_path = ROOT_DIR / "app" / "static" / "manifest.webmanifest"
         self.assertEqual(

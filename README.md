@@ -1,8 +1,12 @@
 # Journaling Tracker
 
+![Screenshot der Anwendung](<Screenshot_Version 3-2-1.png>)
+
 Eine lokale Web-App zum Führen eines digitalen Journals mit Markdown-Support, mehreren Template-Varianten und optionaler KI-Integration.
 
 Architektur, Datenfluesse, Invarianten, bekannte Risiken und der LLM-Onboarding-Guide stehen in [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md).
+
+https://youtu.be/iT8kh9ieWuw
 
 ## Funktionen
 

@@ -156,6 +156,27 @@
     .journal-proposed-tag { color: #fdba74; }
     .journal-ai-tag { color: #bae6fd; }
     .journal-ai-text { color: #bae6fd; }
+    .write-hashtag-editor { position: relative; min-width: 0; width: 100%; }
+    .write-hashtag-textarea { height: 100%; }
+    .write-hashtag-highlight {
+      position: absolute; inset: 0; z-index: 2; overflow: hidden; pointer-events: none;
+      box-sizing: border-box; white-space: pre-wrap; overflow-wrap: break-word;
+      color: #f3f4f6; background: transparent; border: 1px solid transparent;
+    }
+    .write-hashtag-highlight-content { display: block; min-width: 100%; will-change: transform; }
+    .write-hashtag-input { position: relative; z-index: 1; background: transparent !important; color: transparent !important; caret-color: #f3f4f6; }
+    .write-hashtag-input::placeholder { color: #9ca3af; opacity: 1; }
+    .write-hashtag-input::selection { background: rgba(74, 222, 128, .35); color: transparent; }
+    /* The overlay covers tag zones, so spellcheck stays visible for prose but
+       cannot draw through a hashtag's solid background. */
+    .write-hashtag-ai { color: #bae6fd; background: #164e63; border-radius: .2em; }
+    .write-hashtag-knowledge { color: #ddd6fe; background: #4c1d95; border-radius: .2em; }
+    .write-hashtag-write-target { color: #fde68a; background: #78350f; border-radius: .2em; }
+    .write-hashtag-family { color: #f9a8d4; background: #831843; border-radius: .2em; }
+    .write-hashtag-approved { color: #86efac; background: #166534; border-radius: .2em; }
+    .write-hashtag-proposal { color: #fdba74; background: #9a3412; border-radius: .2em; }
+    .write-hashtag-unrecognised { background: #111827; border-radius: .2em; }
+    .write-hashtag-caret { display: inline-block; width: 1px; height: 1.2em; margin: 0 -0.5px; vertical-align: -.22em; background: #f3f4f6; }
     .brain-family-entry { border-color: rgba(244, 114, 182, 0.35); background-color: rgba(131, 24, 67, 0.16); }
     @keyframes writeAiGlow {
       0%, 100% { box-shadow: 0 0 5px rgba(255,255,255,.12), 0 0 10px rgba(74,222,128,.16); }
@@ -893,6 +914,24 @@
       }
     }
 
+    // Browsers may restore textarea values from their page session after a
+    // reload. Clear only values that this app already confirmed as saved.
+    const normalSubmissionClearKey = 'journl:clear-submitted-write-input';
+    function rememberSuccessfulNormalSubmission() {
+      try { sessionStorage.setItem(normalSubmissionClearKey, '1'); } catch (_) {}
+    }
+    function clearRestoredSubmittedInput() {
+      try {
+        if (sessionStorage.getItem(normalSubmissionClearKey) === '1') {
+          document.getElementById('simple-input').value = '';
+        }
+      } catch (_) {}
+    }
+    document.getElementById('simple-input').addEventListener('input', () => {
+      try { sessionStorage.removeItem(normalSubmissionClearKey); } catch (_) {}
+    });
+    window.addEventListener('pageshow', clearRestoredSubmittedInput);
+
     // ─── submit handler (normal or AI based on template selection) ──────
     async function handleSubmit() {
       const isAiMode = document.getElementById('template-select').value === AI_MODE_ID;
@@ -910,9 +949,12 @@
 
         const template = config.templates.find(t => t.id === selectedId);
         let payload = {};
+        let submittedSimpleValue = null;
+        const submittedFormValues = new Map();
 
         if (template.type === 'simple') {
-          const content = document.getElementById('simple-input').value.trim();
+          submittedSimpleValue = document.getElementById('simple-input').value;
+          const content = submittedSimpleValue.trim();
           if (!content && template.id !== 'schnell') {
             showToast('Bitte Text eingeben', true);
             return;
@@ -929,8 +971,9 @@
               if (el) el.focus();
               return;
             }
-            if (el && el.value.trim()) {
-              values[field.id] = el.value.trim();
+            if (el) {
+              submittedFormValues.set(field.id, el.value);
+              if (el.value.trim()) values[field.id] = el.value.trim();
             }
           }
           payload = { form_id: selectedId, values };
@@ -965,25 +1008,23 @@
             // Die gerade übermittelten Felder anschließend leeren.
             if (template.type === 'simple') {
               const textarea = document.getElementById('simple-input');
-              textarea.classList.add('wipe-out');
-              setTimeout(() => {
+              if (textarea.value === submittedSimpleValue) {
+                rememberSuccessfulNormalSubmission();
                 textarea.value = '';
-                textarea.classList.remove('wipe-out');
                 textarea.focus();
-              }, 350);
+              } else {
+                showToast('Gespeichert – neuer Text bleibt im Eingabefeld.');
+              }
             } else {
+              let hasNewInput = false;
               for (const field of template.fields) {
                 const el = document.getElementById('field-' + field.id);
-                if (el) {
-                  el.classList.add('wipe-out');
-                  setTimeout(() => {
-                    el.value = '';
-                    el.classList.remove('wipe-out');
-                  }, 350);
-                }
+                if (el && el.value === submittedFormValues.get(field.id)) el.value = '';
+                else if (el) hasNewInput = true;
               }
+              if (hasNewInput) showToast('Gespeichert – neue Eingaben bleiben erhalten.');
               const firstField = document.getElementById('field-' + template.fields[0].id);
-              if (firstField) setTimeout(() => firstField.focus(), 400);
+              if (firstField) firstField.focus();
             }
           } else if (res.status === 409) {
             const err = await res.json();
@@ -1221,6 +1262,7 @@
 
     // start on write tab
     switchTab('write');
+    clearRestoredSubmittedInput();
 
     // ─── init app info box ────────────────────────────────────────
     const appInfoBox = document.getElementById('app-info-box');
@@ -2244,7 +2286,7 @@
   <script src="{{ url_for('static', filename='planner.js') }}"></script>
   <script src="{{ url_for('static', filename='journal-highlighting.js', v='20260808-4') }}"></script>
   <script src="{{ url_for('static', filename='brain.js', v='20260809-11') }}"></script>
-  <script src="{{ url_for('static', filename='write-hashtags.js', v='20260809-5') }}"></script>
-  <script src="{{ url_for('static', filename='write-ai.js', v='20260809-8') }}"></script>
+  <script src="{{ url_for('static', filename='write-hashtags.js', v='20260809-10') }}"></script>
+  <script src="{{ url_for('static', filename='write-ai.js', v='20260809-9') }}"></script>
 </body>
 </html>

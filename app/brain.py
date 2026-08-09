@@ -1391,6 +1391,75 @@ def knowledge_source_options(user_id):
     return sorted(options, key=lambda item: (item["scope"], item["path"].casefold()))
 
 
+def _safe_write_target(root, relative):
+    """Resolve an editable directory tree without accepting browser paths."""
+    if not isinstance(relative, str) or not relative or len(relative) > 240 or "\\" in relative:
+        return None, None
+    candidate_relative = PurePosixPath(relative)
+    if (candidate_relative.is_absolute() or ".." in candidate_relative.parts
+            or candidate_relative.as_posix() != relative or not candidate_relative.parts
+            or candidate_relative.parts[0] not in {"notes", "projects"}):
+        return None, None
+    candidate = root / relative
+    try:
+        if candidate.is_symlink() or not candidate.is_dir() or _is_technical_file(candidate, root):
+            return None, None
+        resolved_root = root.resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(resolved_root)
+        if not resolved.is_dir():
+            return None, None
+    except (OSError, ValueError):
+        return None, None
+    return candidate, resolved
+
+
+def resolve_write_target(user_id, scope, relative):
+    root = _user_root(user_id) if scope == "personal" else FAMILY_DIR if scope == "family" else None
+    if root is None:
+        raise ValueError("Unknown write target scope")
+    candidate, resolved = _safe_write_target(root, relative)
+    if not candidate:
+        raise ValueError("Schreibziel fehlt oder verwendet einen unsicheren Ordner")
+    # Family targets are deliberately admin-managed.  Visibility of individual
+    # files is checked again by the producer before any content reaches Pi.
+    return {"scope": scope, "path": relative, "root": resolved}
+
+
+def write_target_options(user_id):
+    options = []
+    for scope, root in (("personal", _user_root(user_id)), ("family", FAMILY_DIR)):
+        for base in (root / "notes", root / "projects"):
+            if not base.is_dir():
+                continue
+            for path in [base, *sorted((item for item in base.rglob("*") if item.is_dir()), key=lambda p: p.as_posix())]:
+                relative = _relative_path(root, path)
+                candidate, _ = _safe_write_target(root, relative)
+                if candidate:
+                    options.append({"scope": scope, "path": relative, "label": relative})
+    return sorted(options, key=lambda item: (item["scope"], item["path"].casefold()))
+
+
+def external_write_root_options():
+    """Expose only configured host roots; the host worker remains authoritative."""
+    try:
+        value = json.loads(read_text_file(DATA_DIR / "host_worker.json"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return []
+    roots = value.get("external_write_roots", []) if isinstance(value, dict) else []
+    options = []
+    for item in roots if isinstance(roots, list) else []:
+        root_id = item.get("id") if isinstance(item, dict) else None
+        path = item.get("path") if isinstance(item, dict) else None
+        label = item.get("label") if isinstance(item, dict) else None
+        candidate = PurePosixPath(path) if isinstance(path, str) else None
+        if (isinstance(root_id, str) and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", root_id)
+                and candidate and candidate.is_absolute() and ".." not in candidate.parts
+                and candidate.as_posix() == path and isinstance(label, str) and 0 < len(label) <= 120):
+            options.append({"id": root_id, "path": path, "label": label})
+    return sorted(options, key=lambda item: item["label"].casefold())
+
+
 def _query_terms(query):
     required = []
     excluded = []
@@ -2258,6 +2327,8 @@ def brain_tag_catalog():
         return jsonify({
             "catalog": tagging_module.catalog_view(user["id"]),
             "knowledge_source_options": knowledge_source_options(user["id"]),
+            "write_target_options": write_target_options(user["id"]),
+            "external_write_roots": external_write_root_options(),
             "can_manage": _is_admin(user),
             "can_manage_personal": True,
             "can_manage_family": _is_admin(user),
@@ -2292,6 +2363,25 @@ def brain_tag_catalog():
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"ok": True, "source": result})
+    if data.get("scope") == "write_target":
+        family = (data.get("target") or {}).get("family") is True
+        if family and not _is_admin(user):
+            return jsonify({"error": "Admin access is required for Family write targets"}), 403
+        try:
+            target = dict(data.get("target") or {})
+            target.pop("family", None)
+            if data.get("action") == "save":
+                if target.get("root_id"):
+                    root = next((item for item in external_write_root_options() if item["id"] == target.get("root_id")), None)
+                    path = str(target.get("path") or "")
+                    if not root or path != root["path"] and not path.startswith(root["path"].rstrip("/") + "/"):
+                        raise ValueError("Linux-Pfad liegt nicht unter einer freigegebenen Host-Wurzel")
+                else:
+                    resolve_write_target(user["id"], "family" if family else "personal", target.get("path"))
+            result = tagging_module.update_write_target(user["id"], family, data.get("action"), data.get("tag"), target)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "target": result})
     if data.get("scope") not in {"personal", "family"}:
         return jsonify({"error": "Unknown hashtag scope"}), 400
     if data.get("scope") == "family" and not _is_admin(user):

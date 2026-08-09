@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -31,7 +32,10 @@ class WriteAiAndYoutubeTests(unittest.TestCase):
         brain.DATA_DIR, brain.FAMILY_DIR = self.data_dir, self.data_dir / "family"
         self.data_dir.mkdir(exist_ok=True)
         main.USERS_PATH.write_text(json.dumps({"users": [{"id": "user-a", "username": "Alex", "password": "test"}]}), encoding="utf-8")
-        main.CONFIG_PATH.write_text(json.dumps({"ai_providers": [{"id": "provider-a", "label": "Provider A", "model": "model-a", "api_url": "http://example.invalid"}], "templates": []}), encoding="utf-8")
+        main.CONFIG_PATH.write_text(json.dumps({
+            "ai_providers": [{"id": "provider-a", "label": "Provider A", "model": "model-a", "api_url": "http://example.invalid"}],
+            "templates": [{"id": "schnell", "label": "Schnell", "type": "simple"}],
+        }), encoding="utf-8")
         tagging.update_ai_workflow("user-a", "save", "ai-template", {"agent": "custom", "model": "model-a", "prompt": "Rewrite clearly", "context": "block", "target": "document", "provider_id": "provider-a"})
         main.app.config.update(TESTING=True, SESSION_COOKIE_SECURE=False)
         self.client = main.app.test_client()
@@ -59,7 +63,7 @@ class WriteAiAndYoutubeTests(unittest.TestCase):
         self.assertFalse(list((self.data_dir / "user-a").rglob("Journal_*.md")))
         self.assertIn("My private draft", call.call_args.args[2])
 
-    def test_second_device_draft_is_preserved_under_ai_result(self):
+    def test_independently_replaced_second_device_draft_blocks_ai_result(self):
         draft = self.client.post("/api/write-ai/draft", headers=self.headers, json={"content": "base"}).get_json()
         def ai_call(*_):
             main.write_text_file(self.data_dir / "user-a/temp_Eingabe.md", "typed on another device")
@@ -69,8 +73,95 @@ class WriteAiAndYoutubeTests(unittest.TestCase):
                 "workflow_tag": "ai-template", "provider_id": "provider-a", "model": "model-a",
                 "context_type": "draft", "text": "base", "revision": draft["revision"],
             })
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual((self.data_dir / "user-a/temp_Eingabe.md").read_text(encoding="utf-8"), "typed on another device")
+
+    def test_only_text_added_after_submit_is_kept_below_ai_result(self):
+        draft = self.client.post("/api/write-ai/draft", headers=self.headers, json={"content": "base"}).get_json()
+        def ai_call(*_):
+            main.write_text_file(self.data_dir / "user-a/temp_Eingabe.md", "base\nnew text")
+            return "AI result"
+        with mock.patch.object(main, "_call_ai_api", side_effect=ai_call):
+            response = self.client.post("/api/write-ai/submit", headers=self.headers, json={
+                "workflow_tag": "ai-template", "provider_id": "provider-a", "model": "model-a",
+                "context_type": "draft", "text": "base", "revision": draft["revision"],
+            })
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["content"], "AI result\n\ntyped on another device")
+        self.assertEqual(response.get_json()["content"], "AI result\n\nnew text")
+
+    def test_editing_two_positions_during_ai_run_does_not_duplicate_the_document(self):
+        draft = self.client.post("/api/write-ai/draft", headers=self.headers, json={"content": "first\nsecond"}).get_json()
+        def ai_call(*_):
+            main.write_text_file(self.data_dir / "user-a/temp_Eingabe.md", "first changed\nsecond\ncontinued")
+            return "AI result"
+        with mock.patch.object(main, "_call_ai_api", side_effect=ai_call):
+            response = self.client.post("/api/write-ai/submit", headers=self.headers, json={
+                "workflow_tag": "ai-template", "provider_id": "provider-a", "model": "model-a",
+                "context_type": "draft", "text": "first\nsecond", "revision": draft["revision"],
+            })
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            (self.data_dir / "user-a/temp_Eingabe.md").read_text(encoding="utf-8"),
+            "first changed\nsecond\ncontinued",
+        )
+        self.assertNotIn("AI result", (self.data_dir / "user-a/temp_Eingabe.md").read_text(encoding="utf-8"))
+
+    def test_normal_submit_consumes_only_the_known_ai_draft_revision(self):
+        draft = self.client.post("/api/write-ai/draft", headers=self.headers, json={"content": "AI result"}).get_json()
+        saved = self.client.post("/api/submit", headers=self.headers, json={
+            "template_id": "schnell", "content": "AI result",
+            "consume_draft_revision": draft["revision"],
+        })
+        self.assertEqual(saved.status_code, 200)
+        self.assertTrue(saved.get_json()["draft_consumed"])
+        self.assertEqual((self.data_dir / "user-a/temp_Eingabe.md").read_text(encoding="utf-8"), "")
+
+        old = self.client.post("/api/write-ai/draft", headers=self.headers, json={"content": "old"}).get_json()
+        current = self.client.post("/api/write-ai/draft", headers=self.headers, json={
+            "content": "newer device text", "revision": old["revision"],
+        }).get_json()
+        saved = self.client.post("/api/submit", headers=self.headers, json={
+            "template_id": "schnell", "content": "local journal text",
+            "consume_draft_revision": old["revision"],
+        })
+        self.assertEqual(saved.status_code, 200)
+        self.assertFalse(saved.get_json()["draft_consumed"])
+        self.assertEqual(saved.get_json()["draft_revision"], current["revision"])
+        self.assertEqual((self.data_dir / "user-a/temp_Eingabe.md").read_text(encoding="utf-8"), "newer device text")
+
+    def test_completed_host_job_commits_delta_once_and_never_revives_consumed_draft(self):
+        job_id = str(uuid.uuid4())
+        jobs = self.data_dir / "user-a/ai_jobs"
+        jobs.mkdir(parents=True)
+        job_path = jobs / f"{job_id}.json"
+        source_path = jobs / f"{job_id}.source.md"
+        job_path.write_text(json.dumps({
+            "id": job_id, "user_id": "user-a", "status": "completed",
+            "submitted_text": "base", "section_path": f"user-a/ai_jobs/{job_id}.source.md",
+        }), encoding="utf-8")
+        source_path.write_text("<!-- jt:agent-session {} -->\nAI result\n\n___\n", encoding="utf-8")
+        main.write_text_file(self.data_dir / "user-a/temp_Eingabe.md", "base\nnew text")
+
+        committed = self.client.post(f"/api/write-ai/jobs/{job_id}/commit-draft", headers=self.headers, json={})
+        self.assertEqual(committed.status_code, 200)
+        self.assertEqual(committed.get_json()["content"], "AI result\n\nnew text")
+        repeated = self.client.post(f"/api/write-ai/jobs/{job_id}/commit-draft", headers=self.headers, json={})
+        self.assertEqual(repeated.status_code, 200)
+        self.assertTrue(repeated.get_json()["already"])
+
+        second_job_id = str(uuid.uuid4())
+        (jobs / f"{second_job_id}.json").write_text(json.dumps({
+            "id": second_job_id, "user_id": "user-a", "status": "completed",
+            "submitted_text": "another base", "section_path": f"user-a/ai_jobs/{second_job_id}.source.md",
+        }), encoding="utf-8")
+        (jobs / f"{second_job_id}.source.md").write_text(
+            "<!-- jt:agent-session {} -->\nLate result\n\n___\n", encoding="utf-8",
+        )
+        main.write_text_file(self.data_dir / "user-a/temp_Eingabe.md", "")
+        obsolete = self.client.post(f"/api/write-ai/jobs/{second_job_id}/commit-draft", headers=self.headers, json={})
+        self.assertEqual(obsolete.status_code, 409)
+        self.assertTrue(obsolete.get_json()["obsolete"])
+        self.assertEqual((self.data_dir / "user-a/temp_Eingabe.md").read_text(encoding="utf-8"), "")
 
     def test_write_ai_uses_the_hashtag_workflow_without_a_journal(self):
         with mock.patch.object(main, "_call_ai_api", return_value="AI result"):
@@ -98,7 +189,7 @@ class WriteAiAndYoutubeTests(unittest.TestCase):
             })
         self.assertEqual(response.status_code, 200)
         prompt = call.call_args.args[2]
-        self.assertIn("## Benutzerauftrag\nBitte planen #normaler-tag", prompt)
+        self.assertIn("## Benutzerauftrag\n\nBitte planen #normaler-tag", prompt)
         self.assertIn("## Knowledge-Quellen (Referenzmaterial)", prompt)
         self.assertIn("#einkaufsliste · reference · personal:notes/shopping.md", prompt)
         self.assertIn("Milch und Brot", prompt)

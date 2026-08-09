@@ -48,7 +48,8 @@ class PwaAssetTests(unittest.TestCase):
             self.assertNotIn('<option value="lm_studio">LM Studio</option>', template)
 
     def test_application_version_is_shipped_inside_the_app(self):
-        self.assertEqual((ROOT_DIR / "app" / "VERSION").read_text(encoding="utf-8").strip(), "2.3.1")
+        shipped_version = (ROOT_DIR / "app" / "VERSION").read_text(encoding="utf-8").strip()
+        self.assertRegex(shipped_version, r"^\d+\.\d+\.\d+$")
         self.assertFalse((ROOT_DIR / "VERSION").exists())
         main_source = (ROOT_DIR / "app" / "main.py").read_text(encoding="utf-8")
         self.assertIn('VERSION_PATH = Path(__file__).with_name("VERSION")', main_source)
@@ -104,11 +105,19 @@ class PwaAssetTests(unittest.TestCase):
     def test_private_ai_draft_is_scoped_to_ai_mode(self):
         write_ai = (ROOT_DIR / "app" / "static" / "write-ai.js").read_text(encoding="utf-8")
 
-        self.assertIn("if (!isWritingMode()) return;", write_ai)
-        self.assertIn("if (!isWritingMode() || !field || draftRevision === null) return;", write_ai)
-        self.assertIn("event.target === editor() && isWritingMode()", write_ai)
-        self.assertIn("refreshWorkflows();\n      loadDraft();", write_ai)
-        self.assertNotIn("if (select) select.title = 'Template wählen · KI-Modus: Ctrl/⌘ + Alt/⌥ + K';\n    loadDraft();", write_ai)
+        self.assertIn("editorMode !== 'ai' || !isWritingMode()", write_ai)
+        self.assertIn("window.writeAiDraftRevisionForSubmit = async function", write_ai)
+        self.assertIn("/commit-draft", write_ai)
+        self.assertIn("mergeResponseWithNewInput", write_ai)
+        self.assertIn("current.startsWith(snapshot)", write_ai)
+        self.assertIn("function setEditorContent(content,", write_ai)
+        self.assertIn("field.dispatchEvent(new Event('input', { bubbles: true }))", write_ai)
+        self.assertNotIn("`${responseText}\\n\\n${field.value}`", write_ai)
+        write_hashtags = (ROOT_DIR / "app" / "static" / "write-hashtags.js").read_text(encoding="utf-8")
+        self.assertIn("state.content.innerHTML = highlightMarkup(input.value);", write_hashtags)
+        for template_name in ("desktop.html", "index.html"):
+            template = (ROOT_DIR / "app" / "templates" / template_name).read_text(encoding="utf-8")
+            self.assertNotIn(".write-hashtag-caret", template)
 
     def test_normal_submit_only_clears_the_text_that_was_sent(self):
         for template_name in ("desktop.html", "index.html"):
@@ -120,6 +129,8 @@ class PwaAssetTests(unittest.TestCase):
             self.assertIn("const normalSubmissionClearKey = 'journl:clear-submitted-write-input';", template)
             self.assertIn("rememberSuccessfulNormalSubmission();", template)
             self.assertIn("sessionStorage.removeItem(normalSubmissionClearKey)", template)
+            self.assertIn("payload.consume_draft_revision = draftRevisionToConsume", template)
+            self.assertIn("window.markWriteAiDraftSubmitted(responseData)", template)
 
     def test_manifest_has_expected_metadata(self):
         manifest_path = ROOT_DIR / "app" / "static" / "manifest.webmanifest"

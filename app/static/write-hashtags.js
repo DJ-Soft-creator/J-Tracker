@@ -48,39 +48,33 @@
     return catalogCandidates().find((candidate) => normalisePartial(candidate.name) === normalised) || null;
   }
 
-  function highlightMarkup(value, caretOffset = null) {
+  function highlightMarkup(value) {
     let rendered = '';
     let lastIndex = 0;
-    const addText = (text, offset, includeEnd = false) => {
-      const cursor = caretOffset !== null && caretOffset >= offset
-        && (caretOffset < offset + text.length || (includeEnd && caretOffset === offset + text.length))
-        ? caretOffset - offset : null;
-      if (cursor === null) return escapeHtml(text);
-      return `${escapeHtml(text.slice(0, cursor))}<span class="write-hashtag-caret"></span>${escapeHtml(text.slice(cursor))}`;
-    };
     HASHTAG_RE.lastIndex = 0;
     for (const match of String(value || '').matchAll(HASHTAG_RE)) {
-      rendered += addText(value.slice(lastIndex, match.index), lastIndex);
+      rendered += escapeHtml(value.slice(lastIndex, match.index));
       const suggestion = suggestionForTag(match[1]);
       const className = suggestion && highlightClasses[suggestion.status === 'proposal'
         ? 'proposal' : suggestion.status === 'ai'
           ? 'ai' : suggestion.status === 'knowledge'
             ? 'knowledge' : suggestion.family ? 'family' : 'approved'];
-      const tag = addText(match[0], match.index, true);
+      const tag = escapeHtml(match[0]);
       // Even a new, not-yet-catalogued hashtag is a hashtag rather than a
       // spelling error.  Give it a neutral opaque mask until it is classified.
       rendered += `<span class="${className || 'write-hashtag-unrecognised'}">${tag}</span>`;
       lastIndex = match.index + match[0].length;
     }
-    return rendered + addText(String(value || '').slice(lastIndex), lastIndex, true) + '\u200b';
+    return rendered + escapeHtml(String(value || '').slice(lastIndex)) + '\u200b';
   }
 
   function syncHighlight(state) {
     if (!state.content) return;
     const input = state.input;
-    const caretOffset = document.activeElement === input && input.selectionStart === input.selectionEnd
-      ? input.selectionStart : null;
-    state.content.innerHTML = highlightMarkup(input.value, caretOffset);
+    // The real textarea already exposes an opaque native caret. Drawing a
+    // second caret in the overlay can drift by a pixel after wrapping/scrolling
+    // and makes editing look as if it continued in two different positions.
+    state.content.innerHTML = highlightMarkup(input.value);
     syncHighlightPosition(state);
   }
 

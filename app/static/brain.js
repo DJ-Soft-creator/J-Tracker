@@ -423,6 +423,7 @@ async function updateTagCatalog(payload) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || 'Katalog konnte nicht aktualisiert werden.');
   if (typeof window.loadFamilyHashtags === 'function') await window.loadFamilyHashtags(true);
+  if (typeof window.refreshWriteHashtagCatalog === 'function') await window.refreshWriteHashtagCatalog();
   await Promise.all([loadBrainTags(), loadTagCatalog()]);
 }
 
@@ -437,11 +438,11 @@ function tagCatalogSection(title, scope, catalog, canManage) {
 
 
 function aiWorkflowSection(workflows) {
-  const providers = (window.config?.ai_providers || []).map((provider) => `<option value="${escapeHtmlAttr(provider.id || '')}">${escapeHtml(provider.label || provider.id || '')} · ${escapeHtml(provider.model || '')}</option>`).join('');
+  const providers = '<option value="__host_worker__">Host-Worker · Pi</option>' + (window.config?.ai_providers || []).map((provider) => `<option value="${escapeHtmlAttr(provider.id || '')}">${escapeHtml(provider.label || provider.id || '')} · ${escapeHtml(provider.model || '')}</option>`).join('');
   const cards = Object.entries(workflows || {}).map(([tag, workflow]) => `<article data-ai-workflow-card data-tag="${escapeHtmlAttr(tag)}" class="rounded-lg border border-sky-900/70 bg-sky-950/20 p-3 space-y-2">
     <div class="flex items-center justify-between gap-2"><strong class="text-sm text-sky-200">#${escapeHtml(tag)}</strong><button type="button" data-ai-workflow-remove class="text-xs text-red-400 hover:text-red-300">Entfernen</button></div>
     <div class="grid gap-2 sm:grid-cols-2">
-      <label class="text-xs text-gray-500">Agent<select data-ai-agent class="mt-1 w-full rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-gray-100"><option value="opencode" ${workflow.agent === 'opencode' ? 'selected' : ''}>OpenCode</option><option value="hermes" ${workflow.agent === 'hermes' ? 'selected' : ''}>Hermes</option></select></label>
+      <label class="text-xs text-gray-500">Agent<select data-ai-agent class="mt-1 w-full rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-gray-100"><option value="opencode" ${workflow.agent === 'opencode' ? 'selected' : ''}>OpenCode</option><option value="hermes" ${workflow.agent === 'hermes' ? 'selected' : ''}>Hermes</option><option value="pi" ${workflow.agent === 'pi' ? 'selected' : ''}>Pi</option></select></label>
       <label class="text-xs text-gray-500">Modell<input data-ai-model value="${escapeHtmlAttr(workflow.model || '')}" class="mt-1 w-full rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-gray-100" /></label>
     </div>
     <label class="block text-xs text-gray-500">Schutzklassifizierung<select data-ai-classification class="mt-1 w-full rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-gray-100"><option value="public" ${workflow.classification === 'public' ? 'selected' : ''}>Public</option><option value="internal" ${(workflow.classification || 'internal') === 'internal' ? 'selected' : ''}>Intern</option><option value="confidential" ${workflow.classification === 'confidential' ? 'selected' : ''}>Vertraulich</option><option value="secret" ${workflow.classification === 'secret' ? 'selected' : ''}>Geheim</option></select></label>
@@ -452,6 +453,63 @@ function aiWorkflowSection(workflows) {
     <button type="button" data-ai-workflow-save class="rounded bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-600">Workflow speichern</button>
   </article>`).join('') || '<p class="text-sm text-gray-600">Noch keine AI-Hashtags konfiguriert.</p>';
   return `<section class="bg-gray-900 border border-sky-900/60 rounded-xl p-4 space-y-3"><div class="flex items-center justify-between gap-2"><div><h3 class="font-medium text-sky-200">AI-Hashtags</h3><p class="text-xs text-gray-500">Jedes Hashtag startet eine eigene persistente Agent-Session.</p></div><button type="button" data-ai-workflow-add class="rounded border border-sky-800 px-2 py-1 text-sm text-sky-300 hover:bg-sky-950">+ AI-Hashtag</button></div><div class="space-y-3">${cards}</div></section>`;
+}
+
+
+function knowledgePathOptions(options, scope, selected = '') {
+  const matching = (options || []).filter((option) => option.scope === scope);
+  const currentExists = matching.some((option) => option.path === selected);
+  const choices = matching.map((option) => `<option value="${escapeHtmlAttr(option.path)}"${option.path === selected ? ' selected' : ''}>${escapeHtml(option.label || option.path)}</option>`).join('');
+  const missing = selected && !currentExists ? `<option value="${escapeHtmlAttr(selected)}" selected>Nicht mehr verfügbar: ${escapeHtml(selected)}</option>` : '';
+  return `<option value="">Quelle auswählen…</option>${missing}${choices}`;
+}
+
+
+function knowledgeSourcesSection(sources, options, canManagePersonal, canManageFamily) {
+  const renderScope = (scope, entries, canManage) => Object.entries(entries || {}).map(([tag, source]) => {
+    const path = source.path || '';
+    const controls = canManage ? `<div class="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]"><select data-knowledge-path class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 font-mono text-xs text-gray-100">${knowledgePathOptions(options, scope, path)}</select><div class="flex gap-2"><button type="button" data-knowledge-save class="text-xs text-green-400 hover:text-green-300">Speichern</button><button type="button" data-knowledge-remove class="text-xs text-red-400 hover:text-red-300">Entfernen</button></div></div>` : '';
+    return `<article data-knowledge-source-card data-tag="${escapeHtmlAttr(tag)}" data-scope="${scope}" class="rounded border border-violet-900/60 bg-violet-950/20 p-3"><div class="flex flex-wrap items-center justify-between gap-2"><strong class="text-sm text-violet-200">#${escapeHtml(tag)}</strong><span class="font-mono text-xs text-gray-400">${escapeHtml(scope)}:${escapeHtml(path)}</span></div>${controls}</article>`;
+  }).join('') || '<p class="text-sm text-gray-600">Keine Quellen.</p>';
+  const scopes = `<option value="personal">Persönlich</option>${canManageFamily ? '<option value="family">Family</option>' : ''}`;
+  const hasOptions = (options || []).length > 0;
+  const add = canManagePersonal ? `<form data-knowledge-add class="grid gap-2 pt-2 sm:grid-cols-[minmax(9rem,1fr)_minmax(10rem,1fr)_minmax(14rem,2fr)_auto]"><input data-knowledge-tag required maxlength="80" placeholder="hashtag ohne #" class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-sm text-gray-100" /><select data-knowledge-scope class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-sm text-gray-100">${scopes}</select><select data-knowledge-path class="rounded bg-gray-800 border border-gray-700 px-2 py-1.5 font-mono text-xs text-gray-100"></select><button ${hasOptions ? '' : 'disabled'} class="rounded bg-violet-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-50">Quelle hinzufügen</button></form>${hasOptions ? '' : '<p class="text-xs text-amber-300">Lege zuerst eine persönliche oder sichtbare Family-Notiz bzw. ein Projekt im Brain an.</p>'}` : '';
+  return `<section class="bg-gray-900 border border-violet-900/60 rounded-xl p-4 space-y-3"><div><h3 class="font-medium text-violet-200">Knowledge-Quellen</h3><p class="text-xs text-gray-500">Nur diese ausdrücklich zugeordneten Tags werden bei „KI Senden“ als einmaliger Kontext-Snapshot übergeben.</p></div><div class="space-y-2"><p class="text-xs text-gray-500">Persönlich</p>${renderScope('personal', sources.personal, canManagePersonal)}<p class="pt-1 text-xs text-gray-500">Family</p>${renderScope('family', sources.family, canManageFamily)}</div>${add}</section>`;
+}
+
+
+function bindKnowledgeSourceControls(container, knowledgeOptions) {
+  const addForm = container.querySelector('[data-knowledge-add]');
+  const refreshPaths = (scopeSelect, pathSelect) => {
+    pathSelect.innerHTML = knowledgePathOptions(knowledgeOptions, scopeSelect.value);
+  };
+  if (addForm) {
+    const scopeSelect = addForm.querySelector('[data-knowledge-scope]');
+    const pathSelect = addForm.querySelector('[data-knowledge-path]');
+    refreshPaths(scopeSelect, pathSelect);
+    scopeSelect.addEventListener('change', () => refreshPaths(scopeSelect, pathSelect));
+    addForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!pathSelect.value) { showToast('Bitte eine vorhandene Quelle auswählen.', true); return; }
+      try {
+        await updateTagCatalog({ action: 'save', scope: 'knowledge', tag: addForm.querySelector('[data-knowledge-tag]').value, source: { path: pathSelect.value, family: scopeSelect.value === 'family' } });
+      } catch (error) { showToast(error.message, true); }
+    });
+  }
+  container.querySelectorAll('[data-knowledge-save]').forEach((button) => button.addEventListener('click', async () => {
+    const card = button.closest('[data-knowledge-source-card]');
+    const path = card.querySelector('[data-knowledge-path]').value;
+    if (!path) { showToast('Bitte eine vorhandene Quelle auswählen.', true); return; }
+    try {
+      await updateTagCatalog({ action: 'save', scope: 'knowledge', tag: card.dataset.tag, source: { path, family: card.dataset.scope === 'family' } });
+    } catch (error) { showToast(error.message, true); }
+  }));
+  container.querySelectorAll('[data-knowledge-remove]').forEach((button) => button.addEventListener('click', async () => {
+    const card = button.closest('[data-knowledge-source-card]');
+    try {
+      await updateTagCatalog({ action: 'remove', scope: 'knowledge', tag: card.dataset.tag, source: { family: card.dataset.scope === 'family' } });
+    } catch (error) { showToast(error.message, true); }
+  }));
 }
 
 
@@ -484,7 +542,8 @@ async function loadTagCatalog() {
     return;
   }
   const catalog = data.catalog || {};
-  container.innerHTML = `<div class="space-y-3"><button type="button" data-tag-catalog-back class="text-sm text-green-400 hover:text-green-300">Zurueck zu Timeline &amp; Suche</button>${aiWorkflowSection(catalog.ai || {})}${tagCatalogSection('Meine Hashtags', 'personal', catalog.personal || {}, data.can_manage_personal ?? true)}${tagCatalogSection('Family-Hashtags', 'family', catalog.family || {}, data.can_manage_family ?? data.can_manage)}</div>`;
+  const knowledgeOptions = data.knowledge_source_options || [];
+  container.innerHTML = `<div class="space-y-3"><button type="button" data-tag-catalog-back class="text-sm text-green-400 hover:text-green-300">Zurueck zu Timeline &amp; Suche</button>${aiWorkflowSection(catalog.ai || {})}${knowledgeSourcesSection(catalog.knowledge || {}, knowledgeOptions, data.can_manage_personal ?? true, data.can_manage_family ?? data.can_manage)}${tagCatalogSection('Meine Hashtags', 'personal', catalog.personal || {}, data.can_manage_personal ?? true)}${tagCatalogSection('Family-Hashtags', 'family', catalog.family || {}, data.can_manage_family ?? data.can_manage)}</div>`;
   container.querySelectorAll('[data-ai-workflow-card]').forEach((card) => {
     const workflow = (catalog.ai || {})[card.dataset.tag] || {};
     const provider = card.querySelector('[data-ai-provider]');
@@ -530,6 +589,7 @@ async function loadTagCatalog() {
       await updateTagCatalog({ action: 'save', scope: 'ai', tag, workflow: { agent: 'opencode', model, prompt, context: 'block', context_files: [] } });
     } catch (error) { showToast(error.message, true); }
   });
+  bindKnowledgeSourceControls(container, knowledgeOptions);
 }
 
 

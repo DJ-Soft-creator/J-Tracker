@@ -11,7 +11,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ${JOURNAL_DATA_DIR:-/path/to/journal-data/}:/app/data
+      - ${JOURNAL_DATA_DIR:-/docker-storage/my_Journal_data/data/journals/}:/app/data
     environment:
       - TZ=Europe/Berlin
       - DATA_DIR=/app/data
@@ -32,7 +32,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ${JOURNAL_DATA_DIR:-/path/to/journal-data/}:/app/data
+      - ${JOURNAL_DATA_DIR:-/docker-storage/my_Journal_data/data/journals/}:/app/data
     environment:
       - TZ=Europe/Berlin
       - DATA_DIR=/app/data

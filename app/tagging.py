@@ -6,7 +6,7 @@ import re
 import threading
 import unicodedata
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from scheduling import read_text_file, update_text_file, write_text_file
 
@@ -54,6 +54,7 @@ def _catalog_default():
         "aliases": {},
         "proposals": [],
         "ai_workflows": {},
+        "knowledge_sources": {},
     }
 
 
@@ -68,6 +69,7 @@ def _valid_catalog(value):
         and isinstance(value.get("aliases", {}), dict)
         and isinstance(value.get("proposals", []), list)
         and isinstance(value.get("ai_workflows", {}), dict)
+        and isinstance(value.get("knowledge_sources", {}), dict)
     )
 
 
@@ -103,6 +105,10 @@ def _write_catalog(user_id, family, updater):
             for tag, workflow in catalog.get("ai_workflows", {}).items()
             if normalise_tag(tag).startswith("ai-") and isinstance(workflow, dict)
         }
+        catalog["knowledge_sources"] = {
+            normalise_tag(tag): source for tag, source in catalog.get("knowledge_sources", {}).items()
+            if normalise_tag(tag) and isinstance(source, dict)
+        }
         known_tags = set(catalog["canonical"]) | set(catalog["ai_workflows"])
         catalog["proposals"] = [tag for tag in catalog["proposals"] if tag not in known_tags]
         return json.dumps(catalog, ensure_ascii=False, indent=2, sort_keys=True) + "\n", result
@@ -133,6 +139,13 @@ def catalog_view(user_id):
         "family": family,
         "canonical": sorted(set(personal["canonical"]) | set(family["canonical"])),
         "ai": personal.get("ai_workflows", {}),
+        # Keep the scopes separate.  A knowledge tag must be unambiguous for a
+        # reader, so the write endpoint rejects duplicate names across these
+        # two catalogs instead of relying on dictionary merge order.
+        "knowledge": {
+            "personal": personal.get("knowledge_sources", {}),
+            "family": family.get("knowledge_sources", {}),
+        },
     }
 
 
@@ -234,6 +247,39 @@ def update_ai_workflow(user_id, action, tag, workflow=None):
         return workflows.get(tag)
 
     return _write_catalog(user_id, False, update)
+
+
+def update_knowledge_source(user_id, family, action, tag, source=None):
+    tag = normalise_tag(tag)
+    if not tag or tag.startswith("ai-"):
+        raise ValueError("A non-AI knowledge hashtag is required")
+
+    # One visible tag may identify exactly one source.  In particular, do not
+    # let a personal definition silently shadow a shared Family definition.
+    other_sources = read_catalog(user_id, family=not family).get("knowledge_sources", {})
+    if action == "save" and tag in other_sources:
+        raise ValueError("This knowledge hashtag is already configured in the other scope")
+
+    def update(catalog):
+        sources = dict(catalog.get("knowledge_sources", {}))
+        if action == "remove":
+            sources.pop(tag, None)
+        elif action == "save":
+            value = source or {}
+            path = str(value.get("path") or "").strip()
+            candidate = PurePosixPath(path)
+            if (
+                not path or "\\" in path or candidate.is_absolute() or ".." in candidate.parts
+                or candidate.suffix != ".md" or candidate.as_posix() != path
+                or not candidate.parts or candidate.parts[0] not in {"notes", "projects"}
+            ):
+                raise ValueError("Knowledge source must be a relative Markdown path")
+            sources[tag] = {"scope": "family" if family else "personal", "path": path}
+        else:
+            raise ValueError("Unknown knowledge source action")
+        catalog["knowledge_sources"] = sources
+        return sources.get(tag)
+    return _write_catalog(user_id, family, update)
 
 
 def canonical_tag(raw, catalogs):

@@ -42,15 +42,15 @@ Der Server verwendet zwei getrennte Git-Arbeitsverzeichnisse und Docker-Compose-
 
 | Umgebung | Verzeichnis | Branch | Befehl |
 |----------|------------|--------|--------|
-| DEV | `/opt/journal-tracker-dev` | `dev-environment` | `scripts/deploy.sh dev` |
-| PROD | `/opt/journal-tracker` | `prod` | `scripts/deploy.sh prod` |
+| DEV | `/docker-storage/Journal-Tracker-DEV` | `dev-environment` | `scripts/deploy.sh dev` |
+| PROD | `/docker-storage/Journal-Tracker` | `prod` | `scripts/deploy.sh prod` |
 
 `scripts/deploy.sh promote` aktualisiert zuerst DEV, verschiebt `prod` ausschließlich
 per Fast-Forward auf denselben Commit und deployt anschließend PROD. Die Promotion wird
 abgebrochen, wenn versionierte lokale Änderungen bestehen oder PROD kein Vorfahr von DEV ist.
 Die persistenten Umgebungsdateien liegen unter
-`/path/to/journal-data-dev/.env` (DEV) und
-`/path/to/journal-data/.env` (PROD).
+`/docker-storage/my_Journal_data_DEV/data/journals/.env` (DEV) und
+`/docker-storage/my_Journal_data/data/journals/.env` (PROD).
 
 Lokale Änderungen können gezielt commitet und auf den zugehörigen Branch gepusht werden:
 
@@ -62,6 +62,27 @@ scripts/deploy.sh git-update both --message "Describe the change"
 
 Ohne `--message` fragt das Skript für jeden Commit nach einer Nachricht. Mit `both` und
 `--message` wird dieselbe Nachricht für beide einzelnen Commits verwendet.
+
+### Public-GitHub aktualisieren
+
+Die freigegebenen Applikationsdateien können aus DEV in das lokale Public-
+Repository `/public-git/J-Tracker` synchronisiert und nach einer ausdrücklichen
+Bestätigung nach GitHub gepusht werden:
+
+```bash
+scripts/deploy.sh public-update
+scripts/deploy.sh public-update --message "Synchronize application changes"
+```
+
+Dabei werden nur die notwendigen Applikationsdateien, Tests und ausgewählte
+Scripts sowie `README.md` veröffentlicht. Interne Markdown-Dokumente,
+Feature-Request-Archive, Screenshots und private Host-Scripts werden
+übersprungen. Die Git-Historie von DEV wird nicht übernommen; das Public-
+Repository behält seine eigene `.git`-Historie. Vor Commit und Push zeigt das
+Skript eine Änderungsübersicht und fragt interaktiv nach Bestätigung.
+
+Details zur Whitelist und zum Ablauf stehen in
+[`scripts/deploy-sh_Readme.md`](scripts/deploy-sh_Readme.md).
 
 ### Lokal entwickeln
 
@@ -84,7 +105,7 @@ Server startet auf `http://localhost:4098`.
 | `AUTH_PASS` | — | Optionales Passwort für die einmalige Account-Migration |
 | `PORT` | `4097` | Externer Port des Docker-Containers |
 | `TZ` | `Europe/Berlin` | Zeitzone für Server-Uhr und Journaleinträge |
-| `JOURNAL_DATA_DIR` | `/path/to/journal-data/` | Host-Verzeichnis, das Docker Compose nach `/app/data` mountet |
+| `JOURNAL_DATA_DIR` | `/docker-storage/my_Journal_data/data/journals/` | Host-Verzeichnis, das Docker Compose nach `/app/data` mountet |
 | `DATA_DIR` | `/app/data` | Gemeinsames Datenverzeichnis für Journale, Familienaufgaben und Planner |
 | `SCHEDULER_HOUR` | `6` | Lokale Ausführungsstunde des Scheduler-Services |
 | `locale_LLM_IP` | — | IP des lokalen LLM (z. B. LM Studio). Ersetzt `{locale_LLM_IP}`-Platzhalter in `config.json` |
@@ -119,7 +140,7 @@ Journaleinträge werden im Volume-Pfad gespeichert (standardmäßig `/app/data` 
   users.json
   <user-id>/
     2026/06/06/Journal_2026-06-06.md
-    notes/beispiel-notiz.md
+    notes/Pflanzen.md
     projects/Projekt.md
 ```
 
@@ -179,6 +200,9 @@ Ausführung und zum Markdown-Format stehen in der
 
 Die App verwendet ein durchgängiges Dark-Only Design mit Tailwind CSS (CDN). Das vollständige Farbschema und die Komponentenspezifikation finden sich in `DESIGN.md`.
 
+## kurze Demo
+https://youtu.be/iT8kh9ieWuw
+
 ## Lizenz
 
-Eigenprojekt von DJ-Soft-creator
+Eigenprojekt.

@@ -112,6 +112,17 @@ answer="$work_dir/answer.md"
 cleanup() { rm -rf "$work_dir"; }
 trap cleanup EXIT
 
+# The config marker is a host-side concurrency guard, not document content.
+# Never place it in the model prompt: otherwise a document-oriented agent can
+# faithfully reproduce it in its answer and expose it in the writing tab.
+without_session_config() {
+  awk '
+    /^<!--[[:space:]]*jt:agent-session-config[[:space:]]*$/ { hidden = 1; next }
+    hidden && /^-->[[:space:]]*$/ { hidden = 0; next }
+    !hidden { print }
+  ' "$1"
+}
+
 {
   printf '%s\n\n' 'Du bearbeitest eine Markdown-Agent-Session.'
   printf '%s\n' 'Antworte ausschließlich mit dem Markdown-Inhalt deiner Antwort. Keine Dateizugriffe, keine Tool-Aufrufe, keine Präambel.'
@@ -120,7 +131,7 @@ trap cleanup EXIT
   cat "$prompt_file"
   case "$context" in
     none) printf '\n\n## Dokument-Kontext\nKein Dokument-Kontext wurde freigegeben.\n' ;;
-    section) printf '\n\n## Gespeicherter Abschnitt\n'; cat "$section_file" ;;
+    section) printf '\n\n## Gespeicherter Abschnitt\n'; without_session_config "$section_file" ;;
     journal) printf '\n\n## Vollständiges Journal\n'; cat "$journal_file" ;;
   esac
   for file in "${context_files[@]}"; do

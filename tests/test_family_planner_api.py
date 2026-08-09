@@ -35,8 +35,8 @@ class FamilyPlannerApiTests(unittest.TestCase):
         data_dir.mkdir(parents=True, exist_ok=True)
         main.USERS_PATH.write_text(json.dumps({
             "users": [
-                {"id": "user-a", "username": "TestuserA", "password": "test"},
-                {"id": "user-b", "username": "TestuserB", "password": "test"},
+                {"id": "user-a", "username": "Alex", "password": "test"},
+                {"id": "user-b", "username": "Bea", "password": "test"},
             ]
         }), encoding="utf-8")
         main.app.config.update(TESTING=True, SESSION_COOKIE_SECURE=False)
@@ -112,7 +112,7 @@ class FamilyPlannerApiTests(unittest.TestCase):
     def test_update_pause_and_delete_plan(self):
         today = main.get_tz_aware_now()[0].date().isoformat()
         created = self.client.post("/api/family/planner", headers=self.headers, json={
-            "title": "Aufgabe erledigen",
+            "title": "Pflanzen gießen",
             "user": "user-a",
             "recurrence": "weekly_saturday",
             "start_date": today,
@@ -144,6 +144,106 @@ class FamilyPlannerApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(family.parse_planner(family._read_file(family.PLANNER_FILE) or ""), [])
+
+    def test_shopping_category_headings_are_not_exposed_as_tasks(self):
+        content = """---
+id: einkaufsliste
+title: Einkaufsliste
+template_id: einkaufsliste
+target_file: einkaufsliste.md
+assigned_users: []
+---
+
+## Aufgaben
+- [ ] id: heading | title: ## Kühlung | user:  | target-date:
+- [ ] id: milk | title: Milch | user:  | target-date:
+- [ ] id: bread | title: Brot | user:  | target-date:
+"""
+        project = family.parse_project_content(content, "einkaufsliste.md")
+
+        self.assertEqual([task["title"] for task in project["tasks"]], ["Milch", "Brot"])
+        self.assertTrue(all(task["gruppe"] == "Kühlung" for task in project["tasks"]))
+
+    def test_shopping_editor_treats_markdown_heading_as_category(self):
+        family._ensure_dirs()
+        family._save_project({
+            "id": "einkaufsliste",
+            "title": "Einkaufsliste",
+            "template_id": "einkaufsliste",
+            "target_file": "einkaufsliste.md",
+            "assigned_users": [],
+            "created_at": "2026-01-01T00:00:00",
+            "created_by": "user-a",
+            "tasks": [],
+            "comments": [],
+        })
+
+        response = self.client.put("/api/family/project/einkaufsliste/editor", headers=self.headers, json={
+            "tasks": [
+                {"title": "## Obst & Gemüse"},
+                {"title": "Äpfel"},
+            ],
+            "comments": [],
+        })
+
+        self.assertEqual(response.status_code, 200)
+        project = family._load_project("einkaufsliste")
+        self.assertEqual([task["title"] for task in project["tasks"]], ["Äpfel"])
+        self.assertEqual(project["tasks"][0]["gruppe"], "Obst & Gemüse")
+
+    def test_shopping_clean_removes_only_completed_items(self):
+        family._ensure_dirs()
+        family._save_project({
+            "id": "einkaufsliste",
+            "title": "Einkaufsliste",
+            "template_id": "einkaufsliste",
+            "target_file": "einkaufsliste.md",
+            "assigned_users": [],
+            "created_at": "2026-01-01T00:00:00",
+            "created_by": "user-a",
+            "tasks": [
+                {"id": "done", "title": "Milch", "completed": True, "user": "", "target_date": ""},
+                {"id": "open", "title": "Brot", "completed": False, "user": "", "target_date": ""},
+            ],
+            "comments": [],
+        })
+
+        response = self.client.post(
+            "/api/family/project/einkaufsliste/shopping-clean",
+            headers=self.headers,
+            json={},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["removed"], 1)
+        project = family._load_project("einkaufsliste")
+        self.assertEqual([task["title"] for task in project["tasks"]], ["Brot"])
+
+    def test_shopping_clean_can_remove_all_open_items(self):
+        family._ensure_dirs()
+        family._save_project({
+            "id": "einkaufsliste",
+            "title": "Einkaufsliste",
+            "template_id": "einkaufsliste",
+            "target_file": "einkaufsliste.md",
+            "assigned_users": [],
+            "created_at": "2026-01-01T00:00:00",
+            "created_by": "user-a",
+            "tasks": [
+                {"id": "open", "title": "Brot", "completed": False, "user": "", "target_date": ""},
+            ],
+            "comments": [],
+        })
+
+        response = self.client.post(
+            "/api/family/project/einkaufsliste/shopping-clean",
+            headers=self.headers,
+            json={"clear_all": True},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["removed"], 1)
+        self.assertEqual(family._load_project("einkaufsliste")["tasks"], [])
 
 
 if __name__ == "__main__":

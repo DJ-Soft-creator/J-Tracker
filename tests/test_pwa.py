@@ -171,7 +171,7 @@ class PwaFlaskTests(unittest.TestCase):
         with mock.patch.object(main, "load_config", return_value={"app_version": "from-data"}), \
                 mock.patch.object(main, "load_app_version", return_value="2.3.1"), \
                 mock.patch.object(main, "_current_user", return_value={
-                    "id": "version-user", "username": "TestuserVersion", "admin": False,
+                    "id": "version-user", "username": "Version", "admin": False,
                 }), \
                 mock.patch.object(main, "_read_users_file", return_value={"users": []}):
             response = self.client.get("/api/config")
@@ -252,7 +252,7 @@ class PwaFlaskTests(unittest.TestCase):
             ),
             "iPadOS desktop mode": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) TestuserVersion/18.0 "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 "
                 "Mobile/15E148 Safari/604.1",
                 "index.html",
             ),
@@ -278,7 +278,7 @@ class PwaFlaskTests(unittest.TestCase):
             ),
             "Mac desktop": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) TestuserVersion/18.0 "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 "
                 "Safari/605.1.15",
                 "desktop.html",
             ),

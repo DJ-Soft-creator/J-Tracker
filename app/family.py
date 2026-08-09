@@ -136,17 +136,7 @@ def _project_visible(project, uid):
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---(?:\n|$)", re.DOTALL)
 _KV_RE = re.compile(r"^(\w+):\s*(.*)$")
 
-_TASK_RE = re.compile(
-    r'^-\s*\[(?P<check>[ xX])\]\s*'
-    r'id:\s*(?P<id>[^|]+?)\s*\|\s*'
-    r'title:\s*(?P<title>[^|]*?)\s*\|\s*'
-    r'user:\s*(?P<user>[^|]*?)\s*\|\s*'
-    r'target-date:\s*(?P<target_date>[^|]*?)\s*'
-    r'(?:\|\s*created_at:\s*(?P<created_at>[^|]*?))?'
-    r'(?:\|\s*created_by:\s*(?P<created_by>[^|]*?))?'
-    r'(?:\|\s*completed_at:\s*(?P<completed_at>[^|]*?))?\s*'
-    r'(?:\|\s*completed_by:\s*(?P<completed_by>[^|]*?))?\s*$'
-)
+_TASK_PREFIX_RE = re.compile(r"^-\s*\[(?P<check>[ xX])\]\s*(?P<body>.+)$")
 
 _COMMENT_RE = re.compile(
     r'^-\s*id:\s*(?P<id>[^|]+?)\s*\|\s*'
@@ -154,6 +144,94 @@ _COMMENT_RE = re.compile(
     r'text:\s*(?P<text>.*?)\s*\|\s*'
     r'created_at:\s*(?P<created_at>[^|]*?)\s*$'
 )
+
+
+def _is_shopping_project(project):
+    """Whether a project uses the shopping-list representation."""
+    return (
+        project.get("template_id") == "einkaufsliste"
+        or (project.get("target_file") or "").endswith("einkaufsliste.md")
+    )
+
+
+def _shopping_heading_title(title):
+    """Return a shopping category for a Markdown heading, else ``None``.
+
+    Older imports could store category lines (for example ``## Kühlung``) as
+    ordinary tasks.  They are structural information, never purchasable
+    items, and consequently must not receive a completion checkbox.
+    """
+    value = str(title or "").strip()
+    heading = re.fullmatch(r"#{1,6}\s+(.+?)\s*", value)
+    if heading:
+        return heading.group(1).strip()
+    bold_heading = re.fullmatch(r"\*\*(.+?)\*\*", value)
+    if bold_heading:
+        return bold_heading.group(1).strip()
+    return None
+
+
+def _normalize_shopping_heading_tasks(project):
+    """Convert legacy heading-tasks into category metadata on real items."""
+    if not _is_shopping_project(project):
+        return
+
+    category = ""
+    tasks = []
+    for task in project.get("tasks", []):
+        heading = _shopping_heading_title(task.get("title"))
+        if heading:
+            category = heading
+            continue
+        if category and not task.get("gruppe"):
+            task["gruppe"] = category
+        tasks.append(task)
+    project["tasks"] = tasks
+
+
+def _parse_task_line(line):
+    """Parse one extensible task line without losing optional metadata.
+
+    Project files predate shopping categories, so task lines may contain old
+    fields only or newer fields such as ``sort-index`` and ``gruppe``.  A
+    key/value parser accepts both formats and fails closed for malformed or
+    duplicate metadata.
+    """
+    match = _TASK_PREFIX_RE.match(line)
+    if not match:
+        return None
+    values = {}
+    for part in match.group("body").split("|"):
+        if ":" not in part:
+            return None
+        key, value = part.split(":", 1)
+        key = key.strip().casefold()
+        if not key or key in values:
+            return None
+        values[key] = value.strip()
+    required = {"id", "title", "user", "target-date"}
+    if not required.issubset(values):
+        return None
+    task_id = values["id"]
+    if not _valid_id(task_id):
+        return None
+    sort_index = values.get("sort-index", "")
+    if sort_index and not sort_index.isdigit():
+        return None
+    return {
+        "id": task_id,
+        "title": values["title"],
+        "user": values["user"],
+        "target_date": values["target-date"],
+        "completed": match.group("check").lower() == "x",
+        "created_at": values.get("created_at", ""),
+        "created_by": values.get("created_by", ""),
+        "completed_at": values.get("completed_at", "") or None,
+        "completed_by": values.get("completed_by", "") or None,
+        "sort_index": int(sort_index) if sort_index else None,
+        "gruppe": values.get("gruppe", ""),
+        "source": "manual",
+    }
 
 def parse_project_file(path: Path):
     """Liest eine Projekt-Datei und liefert ein dict (oder None)."""
@@ -250,25 +328,16 @@ def parse_project_content(content, file_name=None):
             continue
 
         if section == "tasks":
-            m = _TASK_RE.match(stripped)
-            if m:
-                task_id = m.group("id").strip()
-                if not _valid_id(task_id) or task_id in seen_task_ids:
+            task = _parse_task_line(stripped)
+            if task:
+                task_id = task["id"]
+                if task_id in seen_task_ids:
                     project["_task_ids_valid"] = False
                     continue
                 seen_task_ids.add(task_id)
-                project["tasks"].append({
-                    "id": task_id,
-                    "title": m.group("title").strip(),
-                    "user": m.group("user").strip(),
-                    "target_date": m.group("target_date").strip(),
-                    "completed": m.group("check").lower() == "x",
-                    "created_at": (m.group("created_at") or "").strip(),
-                    "created_by": (m.group("created_by") or "").strip(),
-                    "completed_at": (m.group("completed_at") or "").strip() or None,
-                    "completed_by": (m.group("completed_by") or "").strip() or None,
-                    "source": "manual",
-                })
+                project["tasks"].append(task)
+            elif stripped.startswith("- ["):
+                project["_task_ids_valid"] = False
             continue
 
         if section == "comments":
@@ -282,6 +351,7 @@ def parse_project_content(content, file_name=None):
                 })
             continue
 
+    _normalize_shopping_heading_tasks(project)
     return project
 
 
@@ -318,6 +388,10 @@ def serialize_project(project):
             parts.append(f"completed_at: {t.get('completed_at')}")
         if t.get("completed_by"):
             parts.append(f"completed_by: {t.get('completed_by')}")
+        if t.get("sort_index") is not None:
+            parts.append(f"sort-index: {t.get('sort_index')}")
+        if t.get("gruppe"):
+            parts.append(f"gruppe: {t.get('gruppe')}")
         lines.append(f"- [{check}] " + " | ".join(parts))
     lines.append("")
     lines.append("## Kommentare")
@@ -959,33 +1033,19 @@ def family_planner_run():
         return jsonify({"error": "Scheduler konnte nicht ausgeführt werden"}), 500
 
 
-@family_bp.route("/project/<project_id>/ai-suggest", methods=["POST"])
-def family_project_ai_suggest(project_id):
-    """Ruft einen AI-Provider auf und fuegt die vorgeschlagenen Artikel
-    als neue Tasks zur Einkaufsliste hinzu.
+def sort_shopping_project(project_id, user_id):
+    """Sort one visible shopping list through its configured AI provider.
 
-    Konfiguration via config.json → "shopping_ai":
-      {
-        "ai_provider_id": "<id aus ai_providers>",
-        "system_prompt":   "...",
-        "max_tokens":      500,           # optional
-        "temperature":     0.6            # optional
-      }
+    This is shared by the direct writing-template import and the Family API so
+    the list always receives persisted category headings and sort positions.
     """
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-
     main = _main_module()
     config = main.load_config()
 
     shopping_ai = config.get("shopping_ai") or {}
     provider_id = shopping_ai.get("ai_provider_id")
     if not provider_id:
-        return jsonify({"error": "shopping_ai.ai_provider_id ist nicht konfiguriert"}), 400
+        raise ValueError("shopping_ai.ai_provider_id ist nicht konfiguriert")
 
     provider = None
     for p in config.get("ai_providers", []):
@@ -993,17 +1053,17 @@ def family_project_ai_suggest(project_id):
             provider = p
             break
     if not provider:
-        return jsonify({"error": f"Unbekannter AI-Provider '{provider_id}'"}), 400
+        raise ValueError(f"Unbekannter AI-Provider '{provider_id}'")
 
     system_prompt = shopping_ai.get("system_prompt", "")
     if not system_prompt:
-        return jsonify({"error": "shopping_ai.system_prompt ist leer"}), 400
+        raise ValueError("shopping_ai.system_prompt ist leer")
 
     proj = _load_project(project_id)
     if not proj:
-        return jsonify({"error": "Not found"}), 404
-    if not _project_visible(proj, user["id"]):
-        return jsonify({"error": "Not found"}), 404
+        raise LookupError("Not found")
+    if not _project_visible(proj, user_id):
+        raise LookupError("Not found")
 
     bestehende = [t for t in proj.get("tasks", []) if not t.get("recurring")]
     # Index-basiert: KI bekommt nummerierte Items, gibt nur Indizes + ##-Header zurueck.
@@ -1034,11 +1094,7 @@ def family_project_ai_suggest(project_id):
         "model": provider.get("model", ""),
     }
 
-    try:
-        ai_response = main._call_ai_api(provider, ai_function, user_message)
-    except (ConnectionError, ValueError) as e:
-        logger.error(f"shopping_ai error: {e}")
-        return jsonify({"error": str(e)}), 500
+    ai_response = main._call_ai_api(provider, ai_function, user_message)
 
     # AI-Response parsen (index-basiert):
     #   '## ...' oder '# ...' oder '**...**' → Gruppenname (Rubrik)
@@ -1082,18 +1138,38 @@ def family_project_ai_suggest(project_id):
         if i not in used_indices:
             sort_idx += 1
             t["sort_index"] = sort_idx
-            t.pop("gruppe", None)
+            t["gruppe"] = "Unsortiert"
             neue_tasks.append(t)
 
     proj["tasks"] = recurring_tasks + neue_tasks
     _save_project(proj)
 
-    return jsonify({
-        "ok": True,
+    return {
         "sorted_count": len(used_indices),
         "total_count": len(neue_tasks),
         "raw_response": ai_response,
-    })
+    }
+
+
+@family_bp.route("/project/<project_id>/ai-suggest", methods=["POST"])
+def family_project_ai_suggest(project_id):
+    """Sort an existing shopping list with the configured AI provider."""
+    user = _current_user()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+    csrf_err = _check_csrf()
+    if csrf_err:
+        return csrf_err
+    try:
+        result = sort_shopping_project(project_id, user["id"])
+    except LookupError:
+        return jsonify({"error": "Not found"}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except ConnectionError as exc:
+        logger.error("shopping_ai error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"ok": True, **result})
 
 
 @family_bp.route("/project/<project_id>/raw", methods=["GET"])
@@ -1188,15 +1264,22 @@ def family_shopping_items_put(project_id):
     now, _ = _get_tz_aware_now()
     existing = {t.get("id"): t for t in proj.get("tasks", []) if t.get("source") != "recurring"}
     new_tasks = []
+    current_group = ""
     for item in items:
         title = str(item.get("title", "")).strip()
         if not title:
+            continue
+        heading = _shopping_heading_title(title)
+        if heading:
+            current_group = heading
             continue
         item_id = item.get("id")
         completed = bool(item.get("completed", False))
         if item_id and item_id in existing:
             t = existing[item_id]
             t["title"] = title
+            if current_group:
+                t["gruppe"] = current_group
             if t.get("completed") != completed:
                 if completed:
                     t["completed"] = True
@@ -1208,7 +1291,7 @@ def family_shopping_items_put(project_id):
                     t["completed_by"] = None
             new_tasks.append(t)
         else:
-            new_tasks.append({
+            new_task = {
                 "id": str(uuid.uuid4()),
                 "title": title,
                 "user": "",
@@ -1218,12 +1301,60 @@ def family_shopping_items_put(project_id):
                 "created_by": user["id"],
                 "completed_at": now.isoformat() if completed else None,
                 "completed_by": user["id"] if completed else None,
-            })
+            }
+            if current_group:
+                new_task["gruppe"] = current_group
+            new_tasks.append(new_task)
 
     recurring_tasks = [t for t in proj.get("tasks", []) if t.get("source") == "recurring"]
     proj["tasks"] = new_tasks + recurring_tasks
     _save_project(proj)
     return jsonify({"ok": True, "count": len(new_tasks)})
+
+
+@family_bp.route("/project/<project_id>/shopping-clean", methods=["POST"])
+def family_shopping_clean(project_id):
+    """Remove completed items, or optionally all items, from a shopping list."""
+    user = _current_user()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+    csrf_err = _check_csrf()
+    if csrf_err:
+        return csrf_err
+    path = _project_path(project_id)
+    if path is None:
+        return jsonify({"error": "Not found"}), 404
+    data = request.get_json(silent=True) or {}
+    clear_all = data.get("clear_all") is True
+
+    def clean(content):
+        project = parse_project_content(content, path.name)
+        if not _project_visible(project, user["id"]):
+            return content, {"forbidden": True}
+        if not _is_shopping_project(project):
+            return content, {"not_shopping": True}
+
+        tasks = project.get("tasks", [])
+        remaining = (
+            [task for task in tasks if task.get("source") == "recurring"]
+            if clear_all
+            else [
+                task for task in tasks
+                if task.get("source") == "recurring" or not task.get("completed")
+            ]
+        )
+        removed = len(tasks) - len(remaining)
+        if not removed:
+            return content, {"removed": 0}
+        project["tasks"] = remaining
+        return serialize_project(project), {"removed": removed}
+
+    result = update_text_file(path, clean) or {}
+    if result.get("forbidden"):
+        return jsonify({"error": "Not found"}), 404
+    if result.get("not_shopping"):
+        return jsonify({"error": "Not a shopping list"}), 400
+    return jsonify({"ok": True, "removed": result.get("removed", 0), "cleared_all": clear_all})
 
 
 # ─── Einheitlicher Editor (Tasks + Kommentare) ───────────────────────
@@ -1248,7 +1379,7 @@ def family_project_editor_get(project_id):
     if not _project_visible(proj, user["id"]):
         return jsonify({"error": "Not found"}), 404
 
-    is_shopping = proj.get("template_id") == "einkaufsliste" or (proj.get("target_file") or "").endswith("einkaufsliste.md")
+    is_shopping = _is_shopping_project(proj)
     mode = "compact" if is_shopping else "full"
 
     tasks = []
@@ -1336,10 +1467,16 @@ def family_project_editor_put(project_id):
     # --- Tasks zusammenfuehren ---
     existing = {t.get("id"): t for t in proj.get("tasks", []) if t.get("source") != "recurring"}
     new_tasks = []
+    current_group = ""
     for item in tasks_in:
         title = str(item.get("title", "")).strip()
         if not title:
             continue
+        if is_shopping:
+            heading = _shopping_heading_title(title)
+            if heading:
+                current_group = heading
+                continue
         item_id = item.get("id")
         completed = bool(item.get("completed", False))
         user_val = str(item.get("user", "")).strip()
@@ -1349,6 +1486,8 @@ def family_project_editor_put(project_id):
             t["title"] = title
             t["user"] = user_val
             t["target_date"] = target_date
+            if current_group:
+                t["gruppe"] = current_group
             if t.get("completed") != completed:
                 if completed:
                     t["completed"] = True
@@ -1360,7 +1499,7 @@ def family_project_editor_put(project_id):
                     t["completed_by"] = None
             new_tasks.append(t)
         else:
-            new_tasks.append({
+            new_task = {
                 "id": str(uuid.uuid4()),
                 "title": title,
                 "user": user_val,
@@ -1370,7 +1509,10 @@ def family_project_editor_put(project_id):
                 "created_by": user["id"],
                 "completed_at": now.isoformat() if completed else None,
                 "completed_by": user["id"] if completed else None,
-            })
+            }
+            if is_shopping and current_group:
+                new_task["gruppe"] = current_group
+            new_tasks.append(new_task)
 
     recurring_tasks = [t for t in proj.get("tasks", []) if t.get("source") == "recurring"]
     proj["tasks"] = new_tasks + recurring_tasks
@@ -1641,6 +1783,8 @@ def _sanitize_project(proj):
             "recurrence": t.get("recurrence"),
             "recurrence_label": RECURRENCE_LABELS.get(t.get("recurrence"), ""),
             "plan_id": t.get("plan_id"),
+            "sort_index": t.get("sort_index"),
+            "gruppe": t.get("gruppe", ""),
         })
     for c in proj.get("comments", []):
         out["comments"].append({
@@ -1654,7 +1798,7 @@ def _sanitize_project(proj):
 
 
 # ─── Append-API (genutzt von api_submit bei target_file-Templates) ────
-def append_task_to_target_file(target_file, title, user_uid, target_date="", created_by=None):
+def append_task_to_target_file(target_file, title, user_uid, target_date="", created_by=None, group=""):
     """Oeffnet/legt ein Projekt pro target_file an und fuegt einen Task hinzu.
 
     Projekt-ID = slug von target_file (z.B. 'haushalt.md' → 'haushalt').
@@ -1679,6 +1823,8 @@ def append_task_to_target_file(target_file, title, user_uid, target_date="", cre
             "tasks": [],
             "comments": [],
         }
+    shopping_list = target_file.endswith("einkaufsliste.md")
+    existing_order = [task.get("sort_index") for task in proj.get("tasks", []) if isinstance(task.get("sort_index"), int)]
     task = {
         "id": str(uuid.uuid4()),
         "title": title,
@@ -1688,6 +1834,12 @@ def append_task_to_target_file(target_file, title, user_uid, target_date="", cre
         "created_at": now.isoformat(),
         "created_by": created_by or user_uid,
     }
+    if shopping_list:
+        # Der Schreiben-Tab kann bereits sortierte Abschnitte liefern.  Die
+        # Gruppenüberschrift wird daher unverändert gespeichert, ohne einen
+        # nachgelagerten Sortier- oder KI-Schritt zu erzwingen.
+        task["gruppe"] = str(group or "Unsortiert").strip() or "Unsortiert"
+        task["sort_index"] = max(existing_order, default=0) + 1
     proj.setdefault("tasks", []).append(task)
     _atomic_write(path, serialize_project(proj))
     return task

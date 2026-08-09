@@ -59,8 +59,8 @@ class BrainApiTests(unittest.TestCase):
         self.data_dir.mkdir(parents=True, exist_ok=True)
         main.USERS_PATH.write_text(json.dumps({
             "users": [
-                {"id": "user-a", "username": "TestuserA", "password": "test"},
-                {"id": "user-b", "username": "TestuserB", "password": "test"},
+                {"id": "user-a", "username": "Alex", "password": "test"},
+                {"id": "user-b", "username": "Bea", "password": "test"},
             ]
         }), encoding="utf-8")
         self._write_sources()
@@ -317,7 +317,7 @@ class BrainApiTests(unittest.TestCase):
         self.assertEqual(run_tagging.call_args.args[3]["id"], "lm_test")
 
     def test_personal_file_lists_are_separated_recursive_and_filterable(self):
-        self._write("user-a/notes/garden/example-notes.md", "# Example\n\nExample content.\n")
+        self._write("user-a/notes/garden/plants.md", "# Plants\n\nMonstera and fern.\n")
         self._write("user-a/notes/empty.md", "")
         self._write("user-a/projects/home/renovation.md", "# Renovation\n\nPaint the kitchen.\n")
 
@@ -329,19 +329,19 @@ class BrainApiTests(unittest.TestCase):
         projects = projects_response.get_json()["projects"]
         note_paths = {item["path"] for item in notes}
         project_paths = {item["path"] for item in projects}
-        self.assertEqual(note_paths, {"notes/keep.md", "notes/garden/example-notes.md", "notes/empty.md"})
+        self.assertEqual(note_paths, {"notes/keep.md", "notes/garden/plants.md", "notes/empty.md"})
         self.assertEqual(project_paths, {"projects/alpha.md", "projects/home/renovation.md"})
         self.assertNotIn("notes/README.md", note_paths)
         self.assertNotIn("projects/visible.md", project_paths)
 
-        nested = next(item for item in notes if item["path"] == "notes/garden/example-notes.md")
-        self.assertEqual(nested["doc_id"], "personal:notes/garden/example-notes.md")
+        nested = next(item for item in notes if item["path"] == "notes/garden/plants.md")
+        self.assertEqual(nested["doc_id"], "personal:notes/garden/plants.md")
         self.assertEqual(nested["kind"], "note")
-        self.assertEqual(nested["title"], "Example")
+        self.assertEqual(nested["title"], "Plants")
         self.assertTrue(nested["modified_at"].endswith("+00:00"))
         self.assertEqual(
-            [item["path"] for item in self.client.get("/api/brain/notes?q=example").get_json()["notes"]],
-            ["notes/garden/example-notes.md"],
+            [item["path"] for item in self.client.get("/api/brain/notes?q=monstera").get_json()["notes"]],
+            ["notes/garden/plants.md"],
         )
         self.assertEqual(
             [item["path"] for item in self.client.get("/api/brain/projects?q=kitchen").get_json()["projects"]],
@@ -805,8 +805,8 @@ class BrainApiTests(unittest.TestCase):
 
     def test_existing_index_discovers_new_and_changed_personal_sources(self):
         brain.rebuild_user_index("user-a")
-        self._write("user-a/notes/beispiel-notiz.md", "# Gartenbeispiel\n\nExampleinhalt.\n")
-        self._write("user-a/projects/garten/planung.md", "# Garten\n\nGartenbeispiel.\n")
+        self._write("user-a/notes/Pflanzen.md", "# Pflanzen\n\nMonstera und Farn.\n")
+        self._write("user-a/projects/garten/planung.md", "# Garten\n\nPflanzenprojekt.\n")
         (self.data_dir / "user-a/notes/keep.md").write_text(
             "# Keep\n\nExtern geaenderte Notiz.\n",
             encoding="utf-8",
@@ -816,7 +816,7 @@ class BrainApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         paths = {item["path"] for item in payload["results"]}
-        self.assertIn("notes/beispiel-notiz.md", paths)
+        self.assertIn("notes/Pflanzen.md", paths)
         self.assertIn("projects/garten/planung.md", paths)
         self.assertTrue(payload["index_pending"])
         changed = self.client.get("/api/brain/search?q=extern+geaenderte").get_json()["results"]
@@ -824,17 +824,17 @@ class BrainApiTests(unittest.TestCase):
 
         opened = self.client.get(
             "/api/brain/document",
-            query_string={"doc_id": "personal:notes/beispiel-notiz.md"},
+            query_string={"doc_id": "personal:notes/Pflanzen.md"},
         )
         self.assertEqual(opened.status_code, 200)
-        self.assertIn("FicusExample", opened.get_json()["content"])
+        self.assertIn("Monstera", opened.get_json()["content"])
         saved = self.client.put("/api/brain/document", headers=self.headers, json={
-            "doc_id": "personal:notes/beispiel-notiz.md",
-            "content": "# Gartenbeispiel\n\nBeispielinhalt mit mehreren Stichworten.\n",
+            "doc_id": "personal:notes/Pflanzen.md",
+            "content": "# Pflanzen\n\nMonstera, Farn und Ficus.\n",
             "content_hash": opened.get_json()["content_hash"],
         })
         self.assertEqual(saved.status_code, 200)
-        self.assertIn("FicusExample", (self.data_dir / "user-a/notes/beispiel-notiz.md").read_text(encoding="utf-8"))
+        self.assertIn("Ficus", (self.data_dir / "user-a/notes/Pflanzen.md").read_text(encoding="utf-8"))
 
     def test_incomplete_index_falls_back_to_sources(self):
         brain.rebuild_user_index("user-a")

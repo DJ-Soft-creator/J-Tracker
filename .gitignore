@@ -1,28 +1,6 @@
-# Secrets and local configuration
 .env
-.env.*
-!.env.example
-config.json
-users.json
-
-# Runtime and personal data
-/data/
-/journals/
-*.sqlite
-*.sqlite3
-*.db
-*.log
-
-# Python
 __pycache__/
 *.py[cod]
-.pytest_cache/
 .ruff_cache/
-.venv/
-venv/
-
-# Tooling and local files
 .opencode/
 .DS_Store
-.vscode/
-.idea/

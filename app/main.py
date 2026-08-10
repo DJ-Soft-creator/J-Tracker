@@ -29,6 +29,8 @@ import brain as brain_module
 from brain import brain_bp
 import ai_sessions as ai_sessions_module
 from ai_sessions import ai_sessions_bp
+import write_sessions as write_sessions_module
+from write_sessions import write_sessions_bp
 import tagging as tagging_module
 from scheduling import update_text_file, write_text_file, read_text_file
 
@@ -45,6 +47,7 @@ app = Flask(__name__)
 app.register_blueprint(family_bp)
 app.register_blueprint(brain_bp)
 app.register_blueprint(ai_sessions_bp)
+app.register_blueprint(write_sessions_bp)
 
 # ─── Environment flag (prod or dev) ──────────────────────────────────
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "prod").strip().lower()
@@ -597,7 +600,6 @@ def _append_journal_entry(user_id, filepath, entry):
 
 
 _TEMPLATE_FORMATTERS = {
-    "schnell": lambda c, t, d: f"___\n\n- {t}\n{c.strip()}\n~~{t}~~\n\n___\n\n",
     "aufgabe": lambda c, t, d: f"___\n\n## Aufgabe | Datum & Uhrzeit: {d}\n- [ ] {c.strip()}\n\n___\n\n",
     "nebengedanke": lambda c, t, d: f"___\n\n## Nebengedanke | Datum & Uhrzeit: {d}\n{c.strip()}\n\n___\n\n",
     "thema": lambda c, t, d: f"___\n\n## Thema | Datum & Uhrzeit: {d}\n{c.strip()}\n\n___\n\n",
@@ -607,8 +609,12 @@ _TEMPLATE_FORMATTERS = {
 }
 
 
-def _write_markdown_entry(template_id, content, time_str, datetime_str):
+def _write_markdown_entry(template_id, content, time_str, datetime_str, quick_started_at=None):
     """Write markdown entry with separators using template mapping."""
+    if template_id == "schnell":
+        ended_at = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S").strftime("%d.%m. %H:%M:%S")
+        started_at = quick_started_at or ended_at
+        return f"___\n\n- {started_at}\n{content.strip()}\n~~{ended_at}~~\n\n___\n\n"
     formatter = _TEMPLATE_FORMATTERS.get(template_id)
     if formatter:
         return formatter(content, time_str, datetime_str)
@@ -870,6 +876,7 @@ def api_settings_profile_get():
         "created_at": user.get("created_at"),
         "consent": user.get("consent", False),
         "consent_at": user.get("consent_at"),
+        "show_write_hint": user.get("show_write_hint", True),
     })
 
 
@@ -890,6 +897,20 @@ def api_settings_profile_set():
     user["username"] = new_username
     update_user(user)
     return jsonify({"ok": True, "username": user["username"]})
+
+
+@app.route("/api/settings/write-hint", methods=["POST"])
+@require_auth
+@csrf_protect
+def api_settings_write_hint():
+    """Store the compact writing hint per user, across devices and restarts."""
+    enabled = (request.get_json(silent=True) or {}).get("enabled")
+    if not isinstance(enabled, bool):
+        return jsonify({"error": "enabled must be true or false"}), 400
+    user = _current_user()
+    user["show_write_hint"] = enabled
+    update_user(user)
+    return jsonify({"ok": True, "enabled": enabled})
 
 
 @app.route("/api/settings/password", methods=["POST"])
@@ -1870,6 +1891,9 @@ def api_submit():
     content = data.get("content", "")
     values = data.get("values", {})
     consume_draft_revision = data.get("consume_draft_revision")
+    write_session_id = data.get("write_session_id")
+    session_data = None
+    session_media = []
     if consume_draft_revision is not None and (
         not isinstance(consume_draft_revision, str)
         or not re.fullmatch(r"[0-9a-f]{64}", consume_draft_revision)
@@ -1891,6 +1915,13 @@ def api_submit():
 
     user = _current_user()
     uid = user["id"] if user else None
+    if write_session_id is not None:
+        try:
+            session_data, _session_dir, session_media = write_sessions_module.submission_media(uid, write_session_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 409
+        if template_def.get("type") != "simple" or session_data.get("content", "").strip() != content:
+            return jsonify({"error": "Der Session-Stand stimmt nicht mit der Übermittlung überein."}), 409
     assigned_users = template_def.get("assigned_users") or []
     if assigned_users and uid not in assigned_users:
         return jsonify({"error": "Template is not assigned to this user"}), 403
@@ -2010,16 +2041,42 @@ def api_submit():
         return jsonify(response)
 
     filepath = _get_journal_path(now)
+    media_stage = None
+    try:
+        # Final files are moved before their immutable journal marker is written.
+        # If writing the journal fails, the except block moves every file back.
+        if write_session_id:
+            media_stage = write_sessions_module.stage_submission_media(uid, write_session_id, filepath)
+            session_media = media_stage["items"]
 
-    # Build clean markdown (no UUID, no headers/separators)
-    if template_def.get("type") == "simple":
-        md_content = _write_markdown_entry(template_id, content, time_str, datetime_str)
-    else:
-        label = template_def.get("label", template_id)
-        fields = template_def.get("fields", [])
-        md_content = _write_form_markdown(label, time_str, fields, values, datetime_str)
+        # Build clean markdown (no UUID, no headers/separators)
+        if template_def.get("type") == "simple":
+            combined_content = content.strip()
+            media_text = write_sessions_module.media_markdown(session_media)
+            if media_text:
+                combined_content = (combined_content + "\n\n" + media_text).strip()
+            quick_started_at = None
+            if template_id == "schnell" and session_data:
+                try:
+                    created_at = datetime.fromisoformat(str(session_data.get("created_at")))
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=now.tzinfo)
+                    quick_started_at = created_at.astimezone(now.tzinfo).strftime("%d.%m. %H:%M:%S")
+                except (TypeError, ValueError):
+                    quick_started_at = None
+            md_content = _write_markdown_entry(template_id, combined_content, time_str, datetime_str, quick_started_at)
+        else:
+            label = template_def.get("label", template_id)
+            fields = template_def.get("fields", [])
+            md_content = _write_form_markdown(label, time_str, fields, values, datetime_str)
 
-    append_result = _append_journal_entry(uid, filepath, md_content) or {}
+        append_result = _append_journal_entry(uid, filepath, md_content) or {}
+    except Exception:
+        if media_stage:
+            write_sessions_module.rollback_staged_media(media_stage)
+        raise
+    if media_stage:
+        write_sessions_module.commit_submission_media(uid, media_stage)
     ai_sessions = [append_result["agent_session"]] if append_result.get("agent_session") else []
 
     if project_assignment:
@@ -2075,7 +2132,7 @@ def _get_today_entries(user_id=None):
                         content = fh.read()
                     entries = _parse_entries_from_markdown(content)
                     for entry_text in entries:
-                        all_entries.append({"content": entry_text, "file": f.name})
+                        all_entries.append({"content": entry_text, "file": f.name, "media": write_sessions_module.media_from_text(user_id, entry_text)})
                 except (IOError, OSError) as e:
                     logger.error(f"Failed to read journal file {f}: {e}")
 

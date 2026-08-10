@@ -57,6 +57,7 @@
       flex: 1 1 auto;
       min-width: 0;
       min-height: 6rem;
+      position: relative;
       overflow: hidden;
     }
 
@@ -84,10 +85,10 @@
     #form-container::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 999px; }
 
     #input-resize-controls {
-      display: flex;
-      flex: 0 0 2.5rem;
-      width: 2.5rem;
-      height: 2.5rem;
+      position: absolute;
+      right: 0.15rem;
+      bottom: 0.15rem;
+      z-index: 4;
     }
 
     .input-resize-handle {
@@ -95,32 +96,47 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 2.5rem;
-      height: 2.5rem;
+      width: 1.25rem;
+      height: 1.25rem;
       padding: 0;
       border: 1px solid transparent;
-      border-radius: 0.375rem;
+      border-radius: 0.2rem;
       background: transparent;
-      color: #6b7280;
+      color: #374151;
+      opacity: .42;
       line-height: 1;
       cursor: nwse-resize;
       touch-action: none;
       user-select: none;
       -webkit-user-select: none;
-      transition: border-color 0.15s, background-color 0.15s, color 0.15s;
+      transition: border-color 0.15s, background-color 0.15s, color 0.15s, opacity 0.15s;
     }
 
     .input-resize-handle:hover,
     .input-resize-handle:focus-visible,
     .input-resize-handle.dragging {
-      border-color: #4b5563;
-      background: #1f2937;
-      color: #d1d5db;
+      border-color: #374151;
+      background: rgba(31, 41, 55, .72);
+      color: #9ca3af;
+      opacity: 1;
       outline: none;
     }
 
-    .input-resize-icon { font-size: 1rem; }
+    .input-resize-icon { font-size: .65rem; }
     #input-area.resizing #input-surface { pointer-events: none; }
+
+    .write-session-actions { display: flex; align-items: center; gap: .35rem; flex: 0 0 auto; }
+    .write-session-actions #resume-write-session {
+      display: grid; place-items: center; width: 2.5rem; height: 2.5rem; padding: 0;
+      border-radius: 9999px; font-variant-numeric: tabular-nums;
+    }
+    .write-session-action { transition: width .18s ease, opacity .15s ease, margin .18s ease, transform .18s ease; }
+    @media (hover: hover) and (pointer: fine) {
+      .write-session-actions { gap: 0; }
+      .write-session-actions .write-session-action { width: 0; margin: 0; padding: 0; overflow: hidden; opacity: 0; border-width: 0; transform: translateX(-.35rem); pointer-events: none; }
+      .write-session-actions:hover .write-session-action,
+      .write-session-actions:focus-within .write-session-action { width: 2.5rem; margin-left: .15rem; padding: 0; opacity: 1; border-width: 1px; transform: translateX(0); pointer-events: auto; }
+    }
 
     .desktop-controls {
       position: static !important;
@@ -277,6 +293,12 @@
 
               <!-- Form templates container -->
               <div id="form-container" class="space-y-4 pb-4"></div>
+              <div id="input-resize-controls">
+                <button type="button" class="input-resize-handle" data-resize-axis="xy"
+                        aria-label="Größe des Eingabebereichs ändern" title="Ziehen, um Breite und Höhe anzupassen">
+                  <span class="input-resize-icon" aria-hidden="true">↘</span>
+                </button>
+              </div>
             </div>
 
             <div id="project-selector-container" class="hidden pt-2"></div>
@@ -286,12 +308,10 @@
         <!-- All write actions share one stable row; only status text is rendered below. -->
         <div class="desktop-controls px-6 py-3">
           <div class="flex flex-nowrap justify-center gap-2 items-center w-full max-w-5xl mx-auto overflow-visible">
-            <div id="input-resize-controls" class="shrink-0">
-              <button type="button" class="input-resize-handle" data-resize-axis="xy"
-                      aria-label="Größe des Eingabebereichs ändern" title="Ziehen, um Breite und Höhe anzupassen">
-                <span class="input-resize-icon" aria-hidden="true">↘</span>
-              </button>
-            </div>
+            <button id="resume-write-session" type="button" aria-label="Sessions" title="Sessions"
+                    class="h-10 px-3 rounded-lg border border-gray-700/50 text-xs text-gray-300 hover:text-white hover:border-gray-600 transition shrink-0">
+              ● 0
+            </button>
             <select id="template-select" class="h-10 flex-none w-36 min-w-0 rounded-lg bg-gray-800/10 border border-gray-700/10 px-3 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none"></select>
             <button id="submit-btn" onclick="handleSubmit()" class="h-10 bg-green-600/70 hover:bg-green-500 text-white font-semibold px-5 rounded-lg transition text-sm shrink-0">
               Senden
@@ -310,7 +330,7 @@
 
         <!-- App-generated info box (non-editable) -->
         <div class="px-6 mt-3">
-          <div id="app-info-box" class="w-full max-w-lg mx-auto bg-gray-800/10 border border-gray-700/10 rounded-xl px-4 py-3 text-sm text-gray-400 leading-relaxed whitespace-pre-wrap pointer-events-none select-none"></div>
+          <div id="app-info-box" class="w-full max-w-lg mx-auto bg-gray-800/10 border border-gray-700/10 rounded-xl px-3 py-2 text-xs text-gray-500 leading-relaxed whitespace-pre-wrap pointer-events-none select-none"></div>
         </div>
 
       </div>
@@ -414,6 +434,10 @@
             <p class="text-gray-500">Lade…</p>
           </div>
         </section>
+        <section>
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Schreiben</h3>
+          <label class="flex items-center justify-between gap-3 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200"><span><span class="block font-medium">Kurzen Bedienhinweis zeigen</span><span class="block text-xs text-gray-500">Unter dem Schreibfeld; dauerhaft für diesen Benutzer.</span></span><input id="settings-write-hint" type="checkbox" class="h-5 w-5 accent-green-500" /></label>
+        </section>
         {% if IS_DEV %}<section>
           <h3 class="text-sm font-semibold text-gray-300 mb-1">Präsentation</h3>
           <label class="flex items-center justify-between gap-3 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200"><span><span class="block font-medium">YouTube-Mode</span><span class="block text-xs text-gray-500">Nur Darstellung: DEV-Daten und DEV-Endpunkte bleiben aktiv.</span></span><input id="settings-youtube-mode" type="checkbox" class="h-5 w-5 accent-green-500" /></label>
@@ -452,6 +476,12 @@
             <select id="brain-tag-provider" aria-label="Lokaler Anbieter" class="rounded bg-gray-800 border border-gray-700 px-2 py-1 text-gray-100"></select>
             <button id="brain-tag-run" type="button" disabled class="rounded bg-green-700 px-3 py-1 text-white hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed">Starten</button>
           </div>
+        </section>
+        <section>
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Sprachnachrichten</h3>
+          <p class="text-xs text-gray-500 mb-2">Offene Aufnahmen werden automatisch täglich um 11:00 Uhr lokal transkribiert.</p>
+          <button id="settings-transcribe-now" type="button" class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-semibold py-1.5 px-3 rounded transition">Jetzt transkribieren</button>
+          <span id="settings-transcribe-status" class="ml-2 text-xs text-gray-500"></span>
         </section>
         <section class="border-t border-gray-800 pt-4">
           <h3 class="text-sm font-semibold text-gray-300 mb-1">Über Journl</h3>
@@ -545,7 +575,7 @@
     async function apiFetch(url, opts = {}) {
       opts.credentials = 'include';
       opts.headers = opts.headers || {};
-      if (opts.body && !opts.headers['Content-Type']) {
+      if (opts.body && !(opts.body instanceof FormData) && !opts.headers['Content-Type']) {
         opts.headers['Content-Type'] = 'application/json';
       }
       const method = (opts.method || 'GET').toUpperCase();
@@ -603,6 +633,7 @@
         if (headerUser) headerUser.textContent = currentUser;
       }
       loadConfig();
+      loadProfile();
       checkFamilyNotifications();
       clearInterval(familyNotificationTimer);
       familyNotificationTimer = setInterval(checkFamilyNotifications, 60000);
@@ -985,6 +1016,10 @@
           const draftRevisionToConsume = await window.writeAiDraftRevisionForSubmit();
           if (draftRevisionToConsume) payload.consume_draft_revision = draftRevisionToConsume;
         }
+        if (template.type === 'simple' && typeof window.writeSessionForSubmit === 'function') {
+          const writeSessionId = await window.writeSessionForSubmit(submittedSimpleValue);
+          if (writeSessionId) payload.write_session_id = writeSessionId;
+        }
 
         if (template.write_to_journal !== false) await initJournal();
 
@@ -1001,6 +1036,9 @@
           const responseData = await res.json().catch(() => ({}));
 
           if (res.ok) {
+            if (template.type === 'simple' && typeof window.markWriteSessionSubmitted === 'function') {
+              window.markWriteSessionSubmitted(responseData);
+            }
             if (typeof window.markWriteAiDraftSubmitted === 'function') window.markWriteAiDraftSubmitted(responseData);
             showToast(template.id === 'einkaufsliste' ? 'Einkaufsliste übernommen ✅' : 'Gespeichert! ✅');
             if (typeof window.refreshWriteHashtagCatalog === 'function') window.refreshWriteHashtagCatalog();
@@ -1016,7 +1054,8 @@
               const textarea = document.getElementById('simple-input');
               if (textarea.value === submittedSimpleValue) {
                 rememberSuccessfulNormalSubmission();
-                textarea.value = '';
+                if (typeof window.writeEditorReset === 'function') window.writeEditorReset('');
+                else textarea.value = '';
                 textarea.focus();
               } else {
                 showToast('Gespeichert – neuer Text bleibt im Eingabefeld.');
@@ -1123,6 +1162,7 @@
                   </div>
                 </div>
                 <div class="text-gray-200 whitespace-pre-wrap text-sm leading-relaxed">${typeof window.renderJournalText === 'function' ? window.renderJournalText(entry.content) : escapeHtml(entry.content)}</div>
+                ${typeof window.renderJournalMedia === 'function' ? window.renderJournalMedia(entry.media) : ''}
                 <textarea class="edit-area hidden mt-3 w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" rows="6" id="edit-${editId}">${escapeHtml(entry.content)}</textarea>
                 <div class="edit-actions hidden mt-2 flex gap-2">
                   <button onclick="saveEdit('${editId}')" class="bg-green-600 hover:bg-green-500 text-white text-xs py-1.5 px-3 rounded transition">Speichern</button>
@@ -1274,9 +1314,9 @@
       if (!appInfoBox) return;
       const isAiMode = document.getElementById('template-select').value === AI_MODE_ID;
       if (isAiMode) {
-        appInfoBox.textContent = 'KI-Modus aktiv: Text mit #ai-Hashtag eingeben und "KI Senden" klicken. Shortcut: Ctrl/⌘ + Alt/⌥ + K.';
+        appInfoBox.textContent = 'KI-Modus aktiv: Text mit #ai-Hashtag eingeben und „KI Senden“ klicken. KI-Modus: ⌥⌘K (Windows/Linux: Ctrl+Alt+K). Rückgängig: ⌘/Ctrl+Z · Wiederholen: ⇧⌘/Ctrl+Z (Windows auch Ctrl+Y).\nHashtag-Vorschläge: ↑/↓ auswählen, Enter/Tab übernehmen, Esc schließen. Tab rückt ohne offenes Vorschlagsmenü ein.';
       } else {
-        appInfoBox.textContent = 'Text eingeben und "Senden" klicken oder Cmd+Enter drücken. KI-Modus: Ctrl/⌘ + Alt/⌥ + K.';
+        appInfoBox.textContent = 'Text eingeben und „Senden“ klicken oder ⌘/Ctrl+Enter drücken. KI-Modus: ⌥⌘K (Windows/Linux: Ctrl+Alt+K). Rückgängig: ⌘/Ctrl+Z · Wiederholen: ⇧⌘/Ctrl+Z (Windows auch Ctrl+Y).\nHashtag-Vorschläge: ↑/↓ auswählen, Enter/Tab übernehmen, Esc schließen. Tab rückt ohne offenes Vorschlagsmenü ein.';
       }
     }
     updateAppInfoBox();
@@ -1291,6 +1331,16 @@
       loadProfile();
       loadDevices();
       loadSettingsTemplates();
+      const writeHintToggle = document.getElementById('settings-write-hint');
+      if (writeHintToggle && !writeHintToggle.dataset.bound) {
+        writeHintToggle.dataset.bound = 'true';
+        writeHintToggle.addEventListener('change', async () => {
+          const res = await apiFetch('/api/settings/write-hint', { method: 'POST', body: JSON.stringify({ enabled: writeHintToggle.checked }) });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) { writeHintToggle.checked = !writeHintToggle.checked; showToast(data.error || 'Hinweis konnte nicht geändert werden.', true); return; }
+          applyWriteHint(data.enabled);
+        });
+      }
       const youtubeToggle = document.getElementById('settings-youtube-mode');
       if (youtubeToggle && !youtubeToggle.dataset.bound) {
         youtubeToggle.dataset.bound = 'true';
@@ -1320,6 +1370,7 @@
         if (!res.ok) return;
         const data = await res.json();
         currentUser = data.username || currentUser;
+        applyWriteHint(data.show_write_hint !== false);
         document.getElementById('settings-current-username').textContent = currentUser || '–';
         document.getElementById('settings-new-username').value = '';
         const bu = document.getElementById('burger-username');
@@ -1329,6 +1380,12 @@
       } catch (e) {
         console.error('load profile failed:', e);
       }
+    }
+
+    function applyWriteHint(enabled) {
+      appInfoBox?.classList.toggle('hidden', !enabled);
+      const toggle = document.getElementById('settings-write-hint');
+      if (toggle) toggle.checked = Boolean(enabled);
     }
 
     async function loadDevices() {
@@ -2288,9 +2345,11 @@
     scheduleWritePanelClamp();
   </script>
   <script src="{{ url_for('static', filename='planner.js') }}"></script>
-  <script src="{{ url_for('static', filename='journal-highlighting.js', v='20260808-4') }}"></script>
-  <script src="{{ url_for('static', filename='brain.js', v='20260809-11') }}"></script>
-  <script src="{{ url_for('static', filename='write-hashtags.js', v='20260809-11') }}"></script>
-  <script src="{{ url_for('static', filename='write-ai.js', v='20260809-11') }}"></script>
+  <script src="{{ url_for('static', filename='journal-highlighting.js', v='20260810-3') }}"></script>
+  <script src="{{ url_for('static', filename='brain.js', v='20260810-14') }}"></script>
+  <script src="{{ url_for('static', filename='write-history.js', v='20260810-1') }}"></script>
+  <script src="{{ url_for('static', filename='write-hashtags.js', v='20260810-12') }}"></script>
+  <script src="{{ url_for('static', filename='write-ai.js', v='20260810-3') }}"></script>
+  <script src="{{ url_for('static', filename='write-session.js', v='20260810-8') }}"></script>
 </body>
 </html>

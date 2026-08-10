@@ -96,11 +96,27 @@ class PwaAssetTests(unittest.TestCase):
         self.assertIn("data-brain-inline-editor", brain_client)
         self.assertIn("data-brain-manage", brain_client)
         self.assertNotIn("brain-editor-back", brain_client)
+        self.assertIn('id="brain-filter-toggle"', mobile)
+        self.assertIn('aria-controls="brain-filter-panel"', mobile)
+        self.assertIn('id="brain-filter-panel" class="hidden space-y-2"', mobile)
+        self.assertNotIn('id="brain-filter-toggle"', desktop)
         for template in (desktop, mobile):
             self.assertNotIn('id="brain-editor"', template)
             self.assertIn('id="template-select" class="h-10', template)
             self.assertIn('id="submit-btn" onclick="handleSubmit()" class="h-10', template)
             self.assertIn('id="ai-controls" class="hidden flex flex-nowrap', template)
+
+    def test_mobile_navigation_is_below_content_and_header_is_compact(self):
+        mobile = (ROOT_DIR / "app" / "templates" / "index.html").read_text(encoding="utf-8")
+        desktop = (ROOT_DIR / "app" / "templates" / "desktop.html").read_text(encoding="utf-8")
+
+        self.assertGreater(mobile.index('id="mobile-tab-bar"'), mobile.index("</main>"))
+        self.assertIn('id="app-header" class="{% if IS_DEV %}bg-red-900{% else %}bg-gray-900{% endif %} px-4 py-1', mobile)
+        self.assertIn('alt="Journl" class="h-7 w-7 object-contain"', mobile)
+        self.assertIn("#app > header {\n      padding-top: 0.25rem;", mobile)
+        self.assertNotIn("#app > header {\n      padding-top: calc(0.25rem + var(--safe-top));", mobile)
+        self.assertIn("padding-bottom: min(var(--safe-bottom), 0.75rem);", mobile)
+        self.assertNotIn('id="mobile-tab-bar"', desktop)
 
     def test_private_ai_draft_is_scoped_to_ai_mode(self):
         write_ai = (ROOT_DIR / "app" / "static" / "write-ai.js").read_text(encoding="utf-8")
@@ -131,6 +147,63 @@ class PwaAssetTests(unittest.TestCase):
             self.assertIn("sessionStorage.removeItem(normalSubmissionClearKey)", template)
             self.assertIn("payload.consume_draft_revision = draftRevisionToConsume", template)
             self.assertIn("window.markWriteAiDraftSubmitted(responseData)", template)
+
+    def test_new_page_starts_blank_and_only_explicitly_resumes_server_session(self):
+        write_session = (ROOT_DIR / "app" / "static" / "write-session.js").read_text(encoding="utf-8")
+        brain_client = (ROOT_DIR / "app" / "static" / "brain.js").read_text(encoding="utf-8")
+        self.assertIn("resetEditor('');", write_session)
+        self.assertIn("● 0", (ROOT_DIR / "app" / "templates" / "desktop.html").read_text(encoding="utf-8"))
+        self.assertIn("● 0", (ROOT_DIR / "app" / "templates" / "index.html").read_text(encoding="utf-8"))
+        self.assertIn("jsonRequest('/api/write-sessions'", write_session)
+        self.assertIn("window.writeSessionForSubmit", write_session)
+        self.assertIn("navigator.wakeLock.request('screen')", write_session)
+        self.assertIn("recorder.start(10000)", write_session)
+        self.assertNotIn("localStorage", write_session)
+        self.assertNotIn("alert(", write_session)
+        self.assertIn("confirm(", write_session)
+        write_ai = (ROOT_DIR / "app" / "static" / "write-ai.js").read_text(encoding="utf-8")
+        self.assertIn("restoreCurrentSession ? (data.content || '') : ''", write_ai)
+        self.assertIn("window.resumeWriteAiSession = function", write_ai)
+        journal_highlighting = (ROOT_DIR / "app" / "static" / "journal-highlighting.js").read_text(encoding="utf-8")
+        self.assertIn("jt:(?:media|transcript)", journal_highlighting)
+        for template_name in ("desktop.html", "index.html"):
+            template = (ROOT_DIR / "app" / "templates" / template_name).read_text(encoding="utf-8")
+            self.assertIn("payload.write_session_id = writeSessionId", template)
+            self.assertIn("window.markWriteSessionSubmitted(responseData)", template)
+            self.assertIn("filename='write-history.js', v='20260810-1'", template)
+            self.assertIn("filename='write-ai.js', v='20260810-3'", template)
+            self.assertIn("filename='write-session.js', v='20260810-8'", template)
+            self.assertIn("filename='journal-highlighting.js', v='20260810-3'", template)
+            self.assertIn("filename='brain.js', v='20260810-14'", template)
+            self.assertIn('id="settings-transcribe-now"', template)
+        self.assertIn("document.getElementById('input-area').insertAdjacentElement('afterend', strip)", write_session)
+        self.assertIn("Foto angehängt", write_session)
+        self.assertIn("Wird beim Senden übernommen", write_session)
+        self.assertIn("sessionButton.classList.remove('text-green-400')", write_session)
+        self.assertIn("Dokument anhängen", write_session)
+        self.assertIn("data-remove-media", write_session)
+        self.assertIn("chunk_count", write_session)
+        self.assertIn("window.renderJournalMedia(item.media)", brain_client)
+        self.assertIn('class="text-gray-500"', journal_highlighting)
+
+    def test_whisper_initialization_and_operations_are_documented(self):
+        init_script = (ROOT_DIR / "scripts" / "init-whisper.sh").read_text(encoding="utf-8")
+        operations = (ROOT_DIR / "scripts" / "README_whisper.md").read_text(encoding="utf-8")
+        whisper_app = (ROOT_DIR / "whisper_service" / "app.py").read_text(encoding="utf-8")
+
+        for key in (
+            "WHISPER_API_KEY", "WHISPER_MODEL", "WHISPER_COMPUTE_TYPE",
+            "WHISPER_CPU_THREADS", "WHISPER_PORT", "WHISPER_SCHEDULE_HOUR",
+            "WHISPER_LANGUAGE",
+        ):
+            self.assertIn(key, init_script)
+        self.assertIn("openssl rand -hex 32", init_script)
+        self.assertIn("/v1/models/load", init_script)
+        self.assertIn('expected_root="/docker-storage/Journal-Tracker-DEV"', init_script)
+        self.assertIn('expected_root="/docker-storage/Journal-Tracker"', init_script)
+        self.assertIn("sudo ./scripts/init-whisper.sh dev", operations)
+        self.assertIn("sudo ./scripts/init-whisper.sh prod", operations)
+        self.assertIn('@app.post("/v1/models/load")', whisper_app)
 
     def test_manifest_has_expected_metadata(self):
         manifest_path = ROOT_DIR / "app" / "static" / "manifest.webmanifest"

@@ -262,10 +262,15 @@
     const before = input.value.slice(0, state.token.start);
     const after = input.value.slice(cursor);
     const separator = after ? '' : ' ';
-    input.value = `${before}#${suggestion.name}${separator}${after}`;
+    const nextValue = `${before}#${suggestion.name}${separator}${after}`;
     const nextCursor = before.length + suggestion.name.length + 1 + separator.length;
-    input.setSelectionRange(nextCursor, nextCursor);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    if (input.id === 'simple-input' && typeof window.writeEditorReplace === 'function') {
+      window.writeEditorReplace(nextValue, { start: nextCursor, end: nextCursor });
+    } else {
+      input.value = nextValue;
+      input.setSelectionRange(nextCursor, nextCursor);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
     syncHighlight(fieldStates.get(input));
     input.focus({ preventScroll: true });
     closeMenu();

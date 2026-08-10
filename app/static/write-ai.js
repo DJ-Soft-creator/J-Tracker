@@ -11,6 +11,7 @@
   let pendingConsumptionRevision = null;
   let suppressDraftInput = false;
   let editorUserEdited = false;
+  let aiSessionActive = false;
   let aiRequestInFlight = false;
   let writeWorkflows = [];
   let activeHostJob = null;
@@ -21,6 +22,12 @@
   function setEditorContent(content, { autosave = true } = {}) {
     const field = editor();
     if (!field) return null;
+    if (typeof window.writeEditorReplace === 'function') {
+      suppressDraftInput = !autosave;
+      window.writeEditorReplace(content);
+      suppressDraftInput = false;
+      return field;
+    }
     field.value = content;
     const end = field.value.length;
     field.setSelectionRange(end, end);
@@ -74,7 +81,7 @@
     return draftSaveChain;
   }
 
-  async function loadDraft({ handoffContent = '', handoffIsUserInput = false } = {}) {
+  async function loadDraft({ handoffContent = '', handoffIsUserInput = false, restoreCurrentSession = false } = {}) {
     if (editorMode !== 'ai' || !isWritingMode()) return;
     const epoch = aiModeEpoch;
     const serial = ++draftLoadSerial;
@@ -87,7 +94,11 @@
       if (serial !== draftLoadSerial || epoch !== aiModeEpoch || editorMode !== 'ai' || !isWritingMode()) return;
       draftRevision = data.revision;
       const explicitHandoff = handoffIsUserInput && handoffContent.trim();
-      setEditorContent(explicitHandoff ? handoffContent : (data.content || ''), { autosave: false });
+      const visibleContent = explicitHandoff
+        ? handoffContent
+        : (restoreCurrentSession ? (data.content || '') : '');
+      setEditorContent(visibleContent, { autosave: false });
+      if (explicitHandoff || (restoreCurrentSession && visibleContent)) aiSessionActive = true;
       draftDirty = Boolean(explicitHandoff && handoffContent !== (data.content || ''));
       if (draftDirty) await persistDraft(handoffContent, { epoch });
     } catch (_) { /* Offline editing remains available. */ }
@@ -140,6 +151,7 @@
       draftRevision = data.draft_revision;
       pendingConsumptionRevision = null;
       draftDirty = false;
+      aiSessionActive = false;
     } else if (Object.prototype.hasOwnProperty.call(data || {}, 'draft_consumed')) {
       pendingConsumptionRevision = null;
       safeShow('Gespeichert. Ein neuerer KI-Schreibstand eines anderen Geräts bleibt erhalten.');
@@ -433,6 +445,8 @@
       if (activateWritingMode()) event.preventDefault();
       return;
     }
+    // The hashtag picker owns Tab while its suggestion menu is open.
+    if (event.defaultPrevented) return;
     const field = event.target;
     if (event.key !== 'Tab' || field !== editor()) return;
     event.preventDefault();
@@ -444,14 +458,15 @@
     if (event.target !== editor()) return;
     if (event.isTrusted) editorUserEdited = true;
     if (!suppressDraftInput && editorMode === 'ai' && isWritingMode()) {
+      if (event.isTrusted) aiSessionActive = true;
       draftDirty = true;
       queueDraftSave();
     }
   });
 
   function refreshVisibleDraft() {
-    if (editorMode === 'ai' && isWritingMode() && !draftDirty && !activeHostJob && !aiRequestInFlight) {
-      loadDraft();
+    if (aiSessionActive && editorMode === 'ai' && isWritingMode() && !draftDirty && !activeHostJob && !aiRequestInFlight) {
+      loadDraft({ restoreCurrentSession: true });
     }
   }
   window.addEventListener('focus', refreshVisibleDraft);
@@ -467,6 +482,7 @@
       const field = editor();
       const handoffContent = field?.value || '';
       const handoffIsUserInput = editorUserEdited;
+      const restoreCurrentSession = aiSessionActive;
       editorMode = 'ai';
       aiModeEpoch += 1;
       pendingConsumptionRevision = null;
@@ -474,7 +490,7 @@
       draftDirty = false;
       oldAiMode();
       refreshWorkflows();
-      loadDraft({ handoffContent, handoffIsUserInput });
+      loadDraft({ handoffContent, handoffIsUserInput, restoreCurrentSession });
       if (activeHostJob && ['queued', 'running', 'cancelling'].includes(activeHostJob.status)) setBusy(true);
       renderJobActions(activeHostJob);
       if (!activeHostJob || !['queued', 'running', 'cancelling'].includes(activeHostJob.status)) {
@@ -489,6 +505,17 @@
     };
     const oldSubmit = window.handleSubmit;
     window.handleSubmit = function () { return isWritingMode() ? submitWritingAi() : oldSubmit(); };
+    window.resumeWriteAiSession = function (content) {
+      const field = editor();
+      const select = document.getElementById('template-select');
+      if (!field || !select || typeof window.handleAiMode !== 'function') return false;
+      setEditorContent(String(content || ''), { autosave: false });
+      editorUserEdited = true;
+      aiSessionActive = true;
+      select.value = '__ai_mode__';
+      window.handleAiMode();
+      return true;
+    };
     const select = document.getElementById('template-select');
     if (select) select.title = 'Template wählen · KI-Modus: Ctrl/⌘ + Alt/⌥ + K';
   }, 25);

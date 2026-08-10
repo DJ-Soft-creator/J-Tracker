@@ -108,14 +108,19 @@
   }
 
   function renderJournalText(value) {
-    const lines = String(value || '').split('\n');
+    const lines = String(value || '').split('\n').filter(line => !/^<!--\s*jt:(?:media|transcript)\b/.test(line.trim()));
     const aiHeadingIndex = lines.findIndex((line) => /^##\s+KI(?:-Antwort)?\b/i.test(line));
     const hasAiEntry = aiHeadingIndex !== -1;
     const responseDividerIndex = hasAiEntry
       ? lines.findIndex((line, index) => index > aiHeadingIndex && line.trim() === '---')
       : -1;
 
+    // The date belongs to the journal file, not to the card preview. Keep
+    // the time (also for completed quick entries) to retain the chronology.
+    const quickTimestamp = /^\s*(?:-\s+|~~)(?:\d{2}\.\d{2}\.\s+)?(\d{2}:\d{2}:\d{2})(?:~~)?\s*$/;
     return lines.map((line, index) => {
+      const timestamp = line.match(quickTimestamp);
+      if (timestamp) return `<span class="text-gray-500">${timestamp[1]}</span>`;
       const isAiHeading = index === aiHeadingIndex;
       const isAiResponse = hasAiEntry && (
         isAiHeading

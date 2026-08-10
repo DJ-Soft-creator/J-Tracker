@@ -94,14 +94,16 @@
     }
 
     #app > header {
-      padding-top: calc(0.75rem + var(--safe-top));
-      padding-right: max(1.25rem, var(--safe-right));
-      padding-left: max(1.25rem, var(--safe-left));
+      padding-top: 0.25rem;
+      padding-right: max(1rem, var(--safe-right));
+      padding-bottom: 0.25rem;
+      padding-left: max(1rem, var(--safe-left));
     }
 
     #app > nav {
       min-width: 0;
       padding-right: var(--safe-right);
+      padding-bottom: min(var(--safe-bottom), 0.75rem);
       padding-left: var(--safe-left);
     }
 
@@ -130,7 +132,7 @@
       flex: 0 1 auto;
       min-height: 0;
       max-height: 45%;
-      padding-bottom: max(1rem, var(--safe-bottom));
+      padding-bottom: 0;
     }
 
     /* The editor uses all space not needed by the action row. */
@@ -324,7 +326,7 @@
       overflow-x: clip;
     }
 
-    .tab-btn.active { border-bottom-color: #4ade80; color: #4ade80; }
+    .tab-btn.active { border-top-color: #4ade80; color: #4ade80; }
     .form-field { margin-bottom: 1rem; }
     .form-field label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.25rem; color: #d1d5db; }
     .form-field input, .form-field textarea, .form-field select {
@@ -368,6 +370,7 @@
     .write-hashtag-approved { color: #86efac; background: #166534; border-radius: .2em; }
     .write-hashtag-proposal { color: #fdba74; background: #9a3412; border-radius: .2em; }
     .write-hashtag-unrecognised { background: #111827; border-radius: .2em; }
+    .write-session-actions { display: flex; align-items: center; gap: .5rem; flex: 0 0 auto; }
     .brain-family-entry { border-color: rgba(244, 114, 182, 0.35); background-color: rgba(131, 24, 67, 0.16); }
     @keyframes writeAiGlow {
       0%, 100% { box-shadow: 0 0 5px rgba(255,255,255,.12), 0 0 10px rgba(74,222,128,.16); }
@@ -414,8 +417,8 @@
   <div id="app" class="flex flex-col h-full min-w-0 hidden">
 
     <!-- Header -->
-    <header id="app-header" class="{% if IS_DEV %}bg-red-900{% else %}bg-gray-900{% endif %} border-b border-gray-800 px-5 py-3 flex items-center justify-between shrink-0">
-      <img src="{{ url_for('static', filename='logo-dark.png') }}" alt="Journl" class="h-9 w-9 rounded-lg object-cover" />
+    <header id="app-header" class="{% if IS_DEV %}bg-red-900{% else %}bg-gray-900{% endif %} px-4 py-1 flex items-center justify-between shrink-0">
+      <img src="{{ url_for('static', filename='logo-dark.png') }}" alt="Journl" class="h-7 w-7 object-contain" />
       <div class="flex items-center gap-3">
         <span id="youtube-mode-banner" class="hidden rounded-full border border-amber-300/70 bg-amber-400/15 px-2 py-0.5 text-xs font-semibold text-amber-200 whitespace-nowrap">YouTube-Mode</span>
         <span id="clock" class="text-xs text-gray-500 font-mono"></span>
@@ -434,27 +437,6 @@
         </div>
       </div>
     </header>
-
-    <!-- Tab navigation -->
-    <nav class="{% if IS_DEV %}bg-red-900{% else %}bg-gray-900{% endif %} border-b border-gray-800 flex shrink-0 min-w-0">
-      <button onclick="switchTab('write')" id="tab-btn-write" aria-label="Schreiben" title="Schreiben"
-        class="tab-btn active flex-1 min-w-0 px-2 sm:px-5 py-3 text-lg font-medium border-b-2 border-green-400 text-green-400 transition">
-        <span aria-hidden="true">✎</span><span class="sr-only">Schreiben</span>
-      </button>
-      <button onclick="switchTab('dashboard')" id="tab-btn-dashboard" aria-label="Heute" title="Heute"
-        class="tab-btn flex-1 min-w-0 px-2 sm:px-5 py-3 text-lg font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-300 transition">
-        <span aria-hidden="true">◷</span><span class="sr-only">Heute</span>
-      </button>
-      <button onclick="switchTab('family')" id="tab-btn-family" aria-label="Familie" title="Familie"
-        class="tab-btn relative flex-1 min-w-0 px-2 sm:px-5 py-3 text-lg font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-300 transition">
-        <span aria-hidden="true">⌂</span><span class="sr-only">Familie</span>
-        <span id="family-notify" class="hidden absolute left-1/2 -translate-x-1/2 bottom-1 h-[3px] w-12 rounded-full pointer-events-none"></span>
-      </button>
-      <button onclick="switchTab('brain')" id="tab-btn-brain" aria-label="Brain" title="Brain"
-        class="tab-btn flex-1 min-w-0 px-2 sm:px-5 py-3 text-lg font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-300 transition">
-        <span aria-hidden="true">⌕</span><span class="sr-only">Brain</span>
-      </button>
-    </nav>
 
     <!-- Main content -->
     <main class="flex-1 min-h-0 min-w-0 overflow-hidden flex flex-col" style="overscroll-behavior: none;">
@@ -475,8 +457,12 @@
         <!-- Scrollable lower area: controls + AI response -->
         <div id="mobile-controls-scroll" class="min-h-0 min-w-0 overflow-y-auto">
           <!-- All write actions share one horizontally scrollable row. -->
-          <div class="px-6 py-3">
+          <div class="px-6 pt-3 pb-0">
             <div class="flex flex-nowrap justify-center gap-2 items-center max-w-lg min-w-0 mx-auto overflow-visible">
+              <button id="resume-write-session" type="button" aria-label="Sessions" title="Sessions"
+                      class="h-10 px-3 rounded-lg border border-gray-700/50 text-xs text-gray-300 hover:text-white hover:border-gray-600 transition shrink-0">
+                ● 0
+              </button>
               <select id="template-select" class="h-10 flex-none w-36 min-w-0 rounded-lg bg-gray-800/10 border border-gray-700/10 px-3 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none"></select>
               <button id="submit-btn" onclick="handleSubmit()" class="h-10 bg-green-600/70 hover:bg-green-500 text-white font-semibold px-5 rounded-lg transition text-sm shrink-0">
                 Senden
@@ -521,33 +507,39 @@
       <div id="tab-brain" class="tab-content hidden flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
         <div id="brain-app" class="flex flex-col flex-1 min-h-0 min-w-0 max-w-full overflow-hidden">
           <div class="px-4 py-3 border-b border-gray-800 shrink-0 space-y-2">
-            <div class="flex flex-wrap gap-2">
+            <div class="flex gap-2">
               <input id="brain-query" type="search" placeholder="Suchen"
                 class="flex-1 basis-40 min-w-0 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500" />
+              <button id="brain-filter-toggle" type="button" aria-expanded="false" aria-controls="brain-filter-panel"
+                class="shrink-0 rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition">
+                Filter <span id="brain-filter-chevron" class="inline-block ml-1 transition-transform" aria-hidden="true">⌄</span>
+              </button>
             </div>
-            <div id="brain-filter-controls" class="flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
-              <select id="brain-order" aria-label="Sortierung" class="h-7 rounded bg-gray-800 border border-gray-700 px-2 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-green-500">
-                <option value="newest">Neueste</option>
-                <option value="oldest">Älteste</option>
-                <option value="path">Pfad</option>
-              </select>
-              <input id="brain-range-start" type="date" class="sr-only" />
-              <input id="brain-range-end" type="date" class="sr-only" />
-              <button type="button" data-brain-date-picker="brain-range-start" class="h-7 w-7 inline-flex items-center justify-center rounded text-gray-500 hover:bg-gray-800 hover:text-gray-300" title="Startdatum wählen" aria-label="Startdatum wählen"><svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></button>
-              <button type="button" data-brain-date-picker="brain-range-end" class="h-7 w-7 inline-flex items-center justify-center rounded text-gray-500 hover:bg-gray-800 hover:text-gray-300" title="Enddatum wählen" aria-label="Enddatum wählen"><svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></button>
-              <span id="brain-range-summary" class="text-[11px] text-gray-600" aria-live="polite"></span>
-              <button id="brain-range-clear" type="button" class="hidden h-7 w-5 text-gray-600 hover:text-gray-300" title="Zeitraum zurücksetzen" aria-label="Zeitraum zurücksetzen">×</button>
+            <div id="brain-filter-panel" class="hidden space-y-2">
+              <div id="brain-filter-controls" class="flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
+                <select id="brain-order" aria-label="Sortierung" class="h-7 rounded bg-gray-800 border border-gray-700 px-2 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-green-500">
+                  <option value="newest">Neueste</option>
+                  <option value="oldest">Älteste</option>
+                  <option value="path">Pfad</option>
+                </select>
+                <input id="brain-range-start" type="date" class="sr-only" />
+                <input id="brain-range-end" type="date" class="sr-only" />
+                <button type="button" data-brain-date-picker="brain-range-start" class="h-7 w-7 inline-flex items-center justify-center rounded text-gray-500 hover:bg-gray-800 hover:text-gray-300" title="Startdatum wählen" aria-label="Startdatum wählen"><svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></button>
+                <button type="button" data-brain-date-picker="brain-range-end" class="h-7 w-7 inline-flex items-center justify-center rounded text-gray-500 hover:bg-gray-800 hover:text-gray-300" title="Enddatum wählen" aria-label="Enddatum wählen"><svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></button>
+                <span id="brain-range-summary" class="text-[11px] text-gray-600" aria-live="polite"></span>
+                <button id="brain-range-clear" type="button" class="hidden h-7 w-5 text-gray-600 hover:text-gray-300" title="Zeitraum zurücksetzen" aria-label="Zeitraum zurücksetzen">×</button>
+              </div>
+              <div class="flex flex-wrap items-center gap-3 min-w-0 max-w-full">
+                <button id="brain-mode-search" type="button" class="text-sm text-green-400 font-medium">Suche</button>
+                <button id="brain-mode-journals" type="button" class="text-sm text-gray-500 hover:text-gray-300">Journale</button>
+                <button id="brain-mode-tasks" type="button" class="text-sm text-gray-500 hover:text-gray-300">Aufgaben</button>
+                <button id="brain-mode-notes" type="button" class="text-sm text-gray-500 hover:text-gray-300">Notizen</button>
+                <button id="brain-mode-projects" type="button" class="text-sm text-gray-500 hover:text-gray-300">Projekte</button>
+                <button id="brain-mode-family" type="button" class="text-sm text-gray-500 hover:text-gray-300">Familie</button>
+                <span id="brain-index-status" class="text-xs text-gray-600"></span>
+              </div>
+              <div id="brain-tags" class="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto overscroll-contain pr-1" aria-label="Tag-Filter"></div>
             </div>
-            <div class="flex flex-wrap items-center gap-3 min-w-0 max-w-full">
-              <button id="brain-mode-search" type="button" class="text-sm text-green-400 font-medium">Suche</button>
-              <button id="brain-mode-journals" type="button" class="text-sm text-gray-500 hover:text-gray-300">Journale</button>
-              <button id="brain-mode-tasks" type="button" class="text-sm text-gray-500 hover:text-gray-300">Aufgaben</button>
-              <button id="brain-mode-notes" type="button" class="text-sm text-gray-500 hover:text-gray-300">Notizen</button>
-              <button id="brain-mode-projects" type="button" class="text-sm text-gray-500 hover:text-gray-300">Projekte</button>
-              <button id="brain-mode-family" type="button" class="text-sm text-gray-500 hover:text-gray-300">Familie</button>
-              <span id="brain-index-status" class="text-xs text-gray-600"></span>
-            </div>
-             <div id="brain-tags" class="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto overscroll-contain pr-1" aria-label="Tag-Filter"></div>
           </div>
           <div id="brain-browser" class="flex-1 min-h-0 min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-4 py-3 space-y-3">
             <p class="text-gray-500 text-center mt-8">Brain wird geladen…</p>
@@ -556,6 +548,27 @@
       </div>
 
     </main>
+
+    <!-- Mobile tab navigation -->
+    <nav id="mobile-tab-bar" class="{% if IS_DEV %}bg-red-900{% else %}bg-gray-900{% endif %} border-t border-gray-800 flex shrink-0 min-w-0">
+      <button onclick="switchTab('write')" id="tab-btn-write" aria-label="Schreiben" title="Schreiben"
+        class="tab-btn active flex-1 min-w-0 px-2 py-0.5 text-lg leading-6 font-medium border-t-2 border-green-400 text-green-400 transition">
+        <span aria-hidden="true">✎</span><span class="sr-only">Schreiben</span>
+      </button>
+      <button onclick="switchTab('dashboard')" id="tab-btn-dashboard" aria-label="Heute" title="Heute"
+        class="tab-btn flex-1 min-w-0 px-2 py-0.5 text-lg leading-6 font-medium border-t-2 border-transparent text-gray-500 hover:text-gray-300 transition">
+        <span aria-hidden="true">◷</span><span class="sr-only">Heute</span>
+      </button>
+      <button onclick="switchTab('family')" id="tab-btn-family" aria-label="Familie" title="Familie"
+        class="tab-btn relative flex-1 min-w-0 px-2 py-0.5 text-lg leading-6 font-medium border-t-2 border-transparent text-gray-500 hover:text-gray-300 transition">
+        <span aria-hidden="true">⌂</span><span class="sr-only">Familie</span>
+        <span id="family-notify" class="hidden absolute left-1/2 -translate-x-1/2 top-1 h-[3px] w-12 rounded-full pointer-events-none"></span>
+      </button>
+      <button onclick="switchTab('brain')" id="tab-btn-brain" aria-label="Brain" title="Brain"
+        class="tab-btn flex-1 min-w-0 px-2 py-0.5 text-lg leading-6 font-medium border-t-2 border-transparent text-gray-500 hover:text-gray-300 transition">
+        <span aria-hidden="true">⌕</span><span class="sr-only">Brain</span>
+      </button>
+    </nav>
 
   </div>
 
@@ -595,6 +608,10 @@
             <p class="text-gray-500">Lade…</p>
           </div>
         </section>
+        <section>
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Schreiben</h3>
+          <label class="flex items-center justify-between gap-3 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200"><span><span class="block font-medium">Kurzen Bedienhinweis zeigen</span><span class="block text-xs text-gray-500">Gilt dauerhaft für diesen Benutzer.</span></span><input id="settings-write-hint" type="checkbox" class="h-5 w-5 accent-green-500" /></label>
+        </section>
         {% if IS_DEV %}<section>
           <h3 class="text-sm font-semibold text-gray-300 mb-1">Präsentation</h3>
           <label class="flex items-center justify-between gap-3 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200"><span><span class="block font-medium">YouTube-Mode</span><span class="block text-xs text-gray-500">Nur Darstellung: DEV-Daten und DEV-Endpunkte bleiben aktiv.</span></span><input id="settings-youtube-mode" type="checkbox" class="h-5 w-5 accent-green-500" /></label>
@@ -633,6 +650,12 @@
             <select id="brain-tag-provider" aria-label="Lokaler Anbieter" class="rounded bg-gray-800 border border-gray-700 px-2 py-1 text-gray-100"></select>
             <button id="brain-tag-run" type="button" disabled class="rounded bg-green-700 px-3 py-1 text-white hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed">Start</button>
           </div>
+        </section>
+        <section>
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Sprachnachrichten</h3>
+          <p class="text-xs text-gray-500 mb-2">Offene Aufnahmen werden automatisch täglich um 11:00 Uhr lokal transkribiert.</p>
+          <button id="settings-transcribe-now" type="button" class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-semibold py-1.5 px-3 rounded transition">Jetzt transkribieren</button>
+          <span id="settings-transcribe-status" class="ml-2 text-xs text-gray-500"></span>
         </section>
         <section class="border-t border-gray-800 pt-4">
           <h3 class="text-sm font-semibold text-gray-300 mb-1">Über Journl</h3>
@@ -726,7 +749,7 @@
     async function apiFetch(url, opts = {}) {
       opts.credentials = 'include';
       opts.headers = opts.headers || {};
-      if (opts.body && !opts.headers['Content-Type']) {
+      if (opts.body && !(opts.body instanceof FormData) && !opts.headers['Content-Type']) {
         opts.headers['Content-Type'] = 'application/json';
       }
       const method = (opts.method || 'GET').toUpperCase();
@@ -783,6 +806,7 @@
         if (headerUser) headerUser.textContent = currentUser;
       }
       loadConfig();
+      loadProfile();
       checkFamilyNotifications();
       clearInterval(familyNotificationTimer);
       familyNotificationTimer = setInterval(checkFamilyNotifications, 60000);
@@ -1161,6 +1185,10 @@
           const draftRevisionToConsume = await window.writeAiDraftRevisionForSubmit();
           if (draftRevisionToConsume) payload.consume_draft_revision = draftRevisionToConsume;
         }
+        if (template.type === 'simple' && typeof window.writeSessionForSubmit === 'function') {
+          const writeSessionId = await window.writeSessionForSubmit(submittedSimpleValue);
+          if (writeSessionId) payload.write_session_id = writeSessionId;
+        }
 
         if (template.write_to_journal !== false) await initJournal();
 
@@ -1177,6 +1205,9 @@
           const responseData = await res.json().catch(() => ({}));
 
           if (res.ok) {
+            if (template.type === 'simple' && typeof window.markWriteSessionSubmitted === 'function') {
+              window.markWriteSessionSubmitted(responseData);
+            }
             if (typeof window.markWriteAiDraftSubmitted === 'function') window.markWriteAiDraftSubmitted(responseData);
             showToast(template.id === 'einkaufsliste' ? 'Einkaufsliste übernommen ✅' : 'Gespeichert! ✅');
             if (typeof window.refreshWriteHashtagCatalog === 'function') window.refreshWriteHashtagCatalog();
@@ -1192,7 +1223,8 @@
               const textarea = document.getElementById('simple-input');
               if (textarea.value === submittedSimpleValue) {
                 rememberSuccessfulNormalSubmission();
-                textarea.value = '';
+                if (typeof window.writeEditorReset === 'function') window.writeEditorReset('');
+                else textarea.value = '';
                 focusMobileControl(textarea);
               } else {
                 showToast('Gespeichert – neuer Text bleibt im Eingabefeld.');
@@ -1299,6 +1331,7 @@
                   </div>
                 </div>
                 <div class="text-gray-200 whitespace-pre-wrap text-sm leading-relaxed break-words">${typeof window.renderJournalText === 'function' ? window.renderJournalText(entry.content) : escapeHtml(entry.content)}</div>
+                ${typeof window.renderJournalMedia === 'function' ? window.renderJournalMedia(entry.media) : ''}
                 <textarea class="edit-area hidden mt-3 w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" rows="6" id="edit-${editId}">${escapeHtml(entry.content)}</textarea>
                 <div class="edit-actions hidden mt-2 flex gap-2">
                   <button onclick="saveEdit('${editId}')" class="bg-green-600 hover:bg-green-500 text-white text-xs py-1.5 px-3 rounded transition">Speichern</button>
@@ -1625,6 +1658,15 @@
       loadProfile();
       loadDevices();
       loadSettingsTemplates();
+      const writeHintToggle = document.getElementById('settings-write-hint');
+      if (writeHintToggle && !writeHintToggle.dataset.bound) {
+        writeHintToggle.dataset.bound = 'true';
+        writeHintToggle.addEventListener('change', async () => {
+          const res = await apiFetch('/api/settings/write-hint', { method: 'POST', body: JSON.stringify({ enabled: writeHintToggle.checked }) });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) { writeHintToggle.checked = !writeHintToggle.checked; showToast(data.error || 'Hinweis konnte nicht geändert werden.', true); }
+        });
+      }
       const youtubeToggle = document.getElementById('settings-youtube-mode');
       if (youtubeToggle && !youtubeToggle.dataset.bound) {
         youtubeToggle.dataset.bound = 'true';
@@ -1654,6 +1696,8 @@
         if (!res.ok) return;
         const data = await res.json();
         currentUser = data.username || currentUser;
+        const writeHintToggle = document.getElementById('settings-write-hint');
+        if (writeHintToggle) writeHintToggle.checked = data.show_write_hint !== false;
         document.getElementById('settings-current-username').textContent = currentUser || '–';
         document.getElementById('settings-new-username').value = '';
         const bu = document.getElementById('burger-username');
@@ -2346,9 +2390,11 @@
     setInterval(updateClock, 60000);
   </script>
   <script src="{{ url_for('static', filename='planner.js') }}"></script>
-  <script src="{{ url_for('static', filename='journal-highlighting.js', v='20260808-4') }}"></script>
-  <script src="{{ url_for('static', filename='brain.js', v='20260809-11') }}"></script>
-  <script src="{{ url_for('static', filename='write-hashtags.js', v='20260809-11') }}"></script>
-  <script src="{{ url_for('static', filename='write-ai.js', v='20260809-11') }}"></script>
+  <script src="{{ url_for('static', filename='journal-highlighting.js', v='20260810-3') }}"></script>
+  <script src="{{ url_for('static', filename='brain.js', v='20260810-14') }}"></script>
+  <script src="{{ url_for('static', filename='write-history.js', v='20260810-1') }}"></script>
+  <script src="{{ url_for('static', filename='write-hashtags.js', v='20260810-12') }}"></script>
+  <script src="{{ url_for('static', filename='write-ai.js', v='20260810-3') }}"></script>
+  <script src="{{ url_for('static', filename='write-session.js', v='20260810-8') }}"></script>
 </body>
 </html>

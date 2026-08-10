@@ -257,6 +257,14 @@ class WriteAiAndYoutubeTests(unittest.TestCase):
         with mock.patch.object(main, "IS_DEV", False):
             self.assertEqual(self.client.get("/api/settings/youtube-mode").status_code, 404)
 
+    def test_write_hint_preference_is_persisted_per_user(self):
+        self.assertTrue(self.client.get("/api/settings/profile").get_json()["show_write_hint"])
+        response = self.client.post("/api/settings/write-hint", headers=self.headers, json={"enabled": False})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"ok": True, "enabled": False})
+        self.assertFalse(self.client.get("/api/settings/profile").get_json()["show_write_hint"])
+        self.assertEqual(self.client.post("/api/settings/write-hint", headers=self.headers, json={"enabled": "no"}).status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

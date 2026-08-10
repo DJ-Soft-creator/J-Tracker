@@ -225,6 +225,27 @@ class BrainApiTests(unittest.TestCase):
             [{"name": "focus", "count": 1, "scope": "personal"}],
         )
 
+    def test_tag_filter_only_offers_tags_from_matching_documents(self):
+        catalog = {
+            "personal": {"canonical": ["focus", "work", "plan"], "aliases": {}, "ai_workflows": {}},
+            "family": {"canonical": [], "aliases": {}, "ai_workflows": {}},
+        }
+        documents = [
+            {"source": "personal", "blocks": [{"tags": ["focus", "work"]}]},
+            {"source": "personal", "blocks": [{"tags": ["focus", "plan"]}]},
+            {"source": "personal", "blocks": [{"tags": ["work"]}]},
+        ]
+        with mock.patch.object(brain, "_visible_documents", return_value=(documents, False)), mock.patch.object(
+            brain.tagging_module, "catalog_view", return_value=catalog
+        ):
+            response = self.client.get("/api/brain/tags?tags=focus")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            {item["name"] for item in response.get_json()["tags"]},
+            {"focus", "work", "plan"},
+        )
+
     def test_ai_api_allows_five_minutes_for_response(self):
         response = mock.MagicMock()
         response.read.return_value = json.dumps({

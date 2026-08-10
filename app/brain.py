@@ -26,6 +26,7 @@ import family as family_module
 import historical_tagging
 import tagging as tagging_module
 import ai_sessions as ai_sessions_module
+import write_sessions as write_sessions_module
 from scheduling import path_lock, read_text_file, update_text_file, write_text_file
 
 
@@ -63,6 +64,10 @@ _JOURNAL_PATH_RE = re.compile(
 )
 _JOURNAL_DATE_RE = re.compile(r"Journal_(\d{4}-\d{2}-\d{2})\.md$")
 _TIME_RE = re.compile(r"(?:Time:\s*|~~|^\s*[-*]\s*)(\d{2}:\d{2}:\d{2})", re.IGNORECASE | re.MULTILINE)
+_QUICK_DATE_TIME_RE = re.compile(
+    r"^\s*[-*]\s*(\d{2})\.(\d{2})\.\s+(\d{2}:\d{2}:\d{2})",
+    re.MULTILINE,
+)
 _DATETIME_RE = re.compile(
     r"Datum\s*&\s*Uhrzeit:\s*(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})",
     re.IGNORECASE,
@@ -409,6 +414,10 @@ def _block_anchor(text, start_line):
     datetime_match = _DATETIME_RE.search(text)
     if datetime_match:
         return f"timestamp:{datetime_match.group(1).replace(' ', 'T')}", True
+    quick_match = _QUICK_DATE_TIME_RE.search(text)
+    if quick_match:
+        day, month, clock = quick_match.groups()
+        return f"timestamp:{month}-{day}T{clock}", True
     time_match = _TIME_RE.search(text)
     if time_match:
         return f"timestamp:{time_match.group(1)}", True
@@ -488,6 +497,13 @@ def _sort_time(journal_date, anchor, mtime):
         time_value = anchor.removeprefix("timestamp:")
         if re.fullmatch(r"\d{2}:\d{2}:\d{2}", time_value):
             value = f"{journal_date}T{time_value}"
+        elif re.fullmatch(r"\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", time_value):
+            value = f"{journal_date[:4]}-{time_value}"
+            try:
+                if date.fromisoformat(value[:10]) > date.fromisoformat(journal_date):
+                    value = f"{int(journal_date[:4]) - 1}-{time_value}"
+            except ValueError:
+                value = f"{journal_date}T00:00:00"
         elif time_value.startswith(journal_date):
             value = time_value
         else:
@@ -1601,6 +1617,11 @@ def _serialise_result(document, block, user_id=None):
         "project": block.get("project", ""),
         "read_only": document.get("read_only", False),
     }
+    result["media"] = (
+        write_sessions_module.media_from_text(user_id, text)
+        if user_id and document.get("source") == "personal" and document.get("kind") == "journal"
+        else []
+    )
     if document.get("source") == "family" and user_id:
         metadata = document.get("family_metadata") or {}
         result["management"] = {
@@ -1687,6 +1708,26 @@ def _visible_tag_items(documents, catalog):
         }
         for tag in sorted(family | set(counts))
     ]
+
+
+def _documents_with_selected_tags(documents, catalog, selected_tags):
+    """Keep only documents containing every selected approved hashtag.
+
+    Tag chips are document facets: selecting a tag narrows the chips to the
+    remaining files, rather than continuing to offer unrelated tags.
+    """
+    if not selected_tags:
+        return documents
+    matching = []
+    for document in documents:
+        tags = {
+            tag
+            for block in document.get("blocks", [])
+            for tag in block.get("tags", [])
+        }
+        if selected_tags.issubset(_approved_document_tags(document, tags, catalog)):
+            matching.append(document)
+    return matching
 
 
 def _indexed_personal_projects(documents):
@@ -2256,6 +2297,8 @@ def brain_tags():
         return error
     documents, pending = _visible_documents(user["id"])
     catalog = tagging_module.catalog_view(user["id"])
+    selected_tags = _selected_tags()
+    documents = _documents_with_selected_tags(documents, catalog, selected_tags)
     return jsonify({"tags": _visible_tag_items(documents, catalog), "index_pending": pending})
 
 

@@ -20,6 +20,8 @@ https://youtu.be/iT8kh9ieWuw
 - **Familien-Planung** — Einmalige und wiederkehrende Aufgaben mit Verantwortlichkeit, Startdatum, Vorschau, Pausieren und Bearbeiten
 - **Daily Scheduler** — Idempotente Aufgabenerzeugung per Compose-Service und zusätzlicher Prüfung beim Öffnen des Familienbereichs
 - **Brain View** — Lokale Volltextsuche, Timeline, Aufgaben- und Tag-Explorer über erlaubte Markdown-Quellen mit In-Tab-Editor
+- **Schreibsessions & Medien** — Geräteübergreifende Entwürfe, private Fotos, chunkweise Sprachnachrichten und geschützte Darstellung in Heute
+- **Lokales Whisper** — Optionaler CPU-Dienst mit API-Key, Zeitmarken und täglicher Transkription um 11:00 Uhr
 
 ## Schnellstart
 
@@ -39,6 +41,23 @@ docker compose up -d --build
 ```
 
 Die App ist dann unter `http://localhost:4097` erreichbar (Port über `PORT` in `.env` anpassbar).
+
+Der optionale Whisper-Dienst wird je Umgebung einmalig mit einem sicheren
+Initialisierungsskript aktiviert. Es erzeugt den API-Key, startet API und
+Scheduler, prüft den Dienst und lädt das Modell vor:
+
+```bash
+cd /docker-storage/Journal-Tracker-DEV
+sudo ./scripts/init-whisper.sh dev
+```
+
+Nach der Promotion wird PROD separat aus `/docker-storage/Journal-Tracker` mit
+`sudo ./scripts/init-whisper.sh prod` initialisiert. Seine OpenAI-ähnliche
+Transkriptions-API liegt standardmäßig auf Port 8091 (DEV) beziehungsweise 8090
+(PROD) und akzeptiert `POST /v1/audio/transcriptions` nur mit
+`Authorization: Bearer <key>`. Das maschinenlesbare Schema ist unter
+`GET /openapi.json` abrufbar. Vollständige Betriebs-, API- und Fehlerhinweise
+stehen in [scripts/README_whisper.md](scripts/README_whisper.md).
 
 ### Server-Deployment
 
@@ -112,6 +131,13 @@ Server startet auf `http://localhost:4098`.
 | `JOURNAL_DATA_DIR` | `/docker-storage/my_Journal_data/data/journals/` | Host-Verzeichnis, das Docker Compose nach `/app/data` mountet |
 | `DATA_DIR` | `/app/data` | Gemeinsames Datenverzeichnis für Journale, Familienaufgaben und Planner |
 | `SCHEDULER_HOUR` | `6` | Lokale Ausführungsstunde des Scheduler-Services |
+| `WHISPER_API_KEY` | — | Erforderlicher API-Key für den privaten Whisper-Dienst |
+| `WHISPER_MODEL` | `base` | Mehrsprachiges lokales Whisper-Modell |
+| `WHISPER_COMPUTE_TYPE` | `int8` | CPU-schonender Berechnungstyp |
+| `WHISPER_CPU_THREADS` | `4` | CPU-Threads des Whisper-Dienstes |
+| `WHISPER_PORT` | `8090` | Heimnetz-Port der geschützten Whisper-API |
+| `WHISPER_SCHEDULE_HOUR` | `11` | Lokale Stunde für den täglichen Transkriptionslauf |
+| `WHISPER_LANGUAGE` | `de` | Standardsprache für automatische Transkriptionen |
 | `locale_LLM_IP` | — | IP des lokalen LLM (z. B. LM Studio). Ersetzt `{locale_LLM_IP}`-Platzhalter in `config.json` |
 | `BRAIN_INDEX_INTERVAL_SECONDS` | `3600` | Brain-Indexintervall in Sekunden (mindestens 300) |
 | `BRAIN_ARCHIVE_DIR` | `DATA_DIR/_Archiv/Projekte` | Optionaler read-only Pfad für externe Archivprojekte |
@@ -146,6 +172,8 @@ Journaleinträge werden im Volume-Pfad gespeichert (standardmäßig `/app/data` 
     2026/06/06/Journal_2026-06-06.md
     notes/Pflanzen.md
     projects/Projekt.md
+    write_sessions/<session-id>/session.json
+    write_sessions/<session-id>/media/<media-id>/original.m4a
 ```
 
 Einträge sind durch `___` getrennt. Backups werden als `.md.bak` im jeweiligen Tages-Unterordner `_Backup/` erstellt.
@@ -161,6 +189,7 @@ ohne Feld oder mit `false` besitzt er keine gemeinsamen Verwaltungsrechte.
 ## Automatisierung
 
 - [Family Scheduler](scripts/README_scheduler.md) - interner Compose-Service fuer wiederkehrende Familienaufgaben.
+- [Local Whisper](scripts/README_whisper.md) - privater CPU-Dienst, Initialisierung, API und 11-Uhr-Transkription.
 - [External Journal Monitor](scripts/README_journal_monitor.md) - hostseitiger Cron-Job fuer explizite Hermes- und OpenCode-Auftraege; nicht Bestandteil des Containers.
 
 ## API Endpunkte

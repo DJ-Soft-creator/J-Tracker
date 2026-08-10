@@ -219,7 +219,9 @@ async function loadBrainTags() {
   if (!brainElement('brain-tags')) return;
   const request = beginBrainRequest('tags');
   try {
-    const response = await apiFetch('/api/brain/tags', { signal: request.controller.signal });
+    const params = new URLSearchParams();
+    brainState.selectedTags.forEach((tag) => params.append('tags', tag));
+    const response = await apiFetch('/api/brain/tags?' + params.toString(), { signal: request.controller.signal });
     if (!isCurrentBrainRequest(request) || !response.ok) return;
     const data = await response.json();
     if (!isCurrentBrainRequest(request)) return;
@@ -261,6 +263,7 @@ function setBrainTags(items, indexPending) {
       else brainState.selectedTags.add(tag);
       invalidateBrainContext();
       setBrainTags(brainState.tags, null);
+      loadBrainTags();
       loadBrainCurrentMode();
     });
   });
@@ -326,25 +329,22 @@ function renderBrainResults(results, pagination = {}) {
     : '';
   container.innerHTML = results.map((item) => {
     const tags = brainTagBadges(item.tags);
-    const project = item.project ? `<span class="text-xs text-amber-300">${escapeHtml(brainProjectTitle(item.project))}</span>` : '';
+    const filename = String(item.path || '').split('/').pop() || item.path;
     return `<article data-brain-card data-doc-id="${escapeHtmlAttr(item.doc_id)}" class="min-w-0 max-w-full overflow-hidden bg-gray-900 border border-gray-800 rounded-xl p-4 ${item.source === 'family' ? 'brain-family-entry' : ''}">
       <div class="flex items-start justify-between gap-2 mb-2">
         <div class="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
           <span class="border rounded-full px-2 py-0.5 ${brainSourceClass(item.source)}">${escapeHtml(item.source_label)}</span>
-          <span class="break-all font-mono text-gray-600">${escapeHtml(item.path)}</span>
-          ${tags}${project}
-          <span>${escapeHtml(item.kind)}</span><span>${escapeHtml(item.date)}</span>
+          <span class="break-all font-mono text-gray-600">${escapeHtml(filename)}</span>
+          ${tags}
           ${item.read_only ? '<span class="text-amber-400">nur lesen</span>' : ''}
         </div>
         <div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
           ${item.management?.can_manage ? brainManageButton(item.doc_id, item.path.startsWith('projects/') ? 'Projekt' : 'Notiz') : ''}
+          <button type="button" data-brain-metadata data-reference-type="block" data-doc-id="${escapeHtmlAttr(item.doc_id)}" data-fingerprint="${escapeHtmlAttr(item.fingerprint)}" class="text-xs text-gray-500 hover:text-white">Tags bearbeiten</button>
           ${item.read_only ? '' : brainEditButton(item.doc_id, item.fingerprint)}
         </div>
       </div>
-      <div data-brain-display class="min-w-0 max-w-full w-full break-words whitespace-pre-wrap text-sm leading-relaxed text-gray-200">${typeof window.renderJournalText === 'function' ? window.renderJournalText(item.snippet) : escapeHtml(item.snippet)}</div>
-      <div class="min-w-0 max-w-full mt-3 flex flex-wrap gap-2 items-center">
-        <button type="button" data-brain-metadata data-reference-type="block" data-doc-id="${escapeHtmlAttr(item.doc_id)}" data-fingerprint="${escapeHtmlAttr(item.fingerprint)}" class="text-xs text-gray-500 hover:text-white">Tags bearbeiten</button>
-      </div>
+      <div data-brain-display class="min-w-0 max-w-full w-full break-words whitespace-pre-wrap text-sm leading-relaxed text-gray-200">${typeof window.renderJournalText === 'function' ? window.renderJournalText(item.snippet) : escapeHtml(item.snippet)}${typeof window.renderJournalMedia === 'function' ? window.renderJournalMedia(item.media) : ''}</div>
     </article>`;
   }).join('') + more;
   bindBrainCardActions(container);
@@ -1493,6 +1493,16 @@ brainElement('brain-range-clear').addEventListener('click', () => {
   loadBrainForQuery();
 });
 updateBrainRangeSummary();
+const brainFilterToggle = brainElement('brain-filter-toggle');
+const brainFilterPanel = brainElement('brain-filter-panel');
+if (brainFilterToggle && brainFilterPanel) {
+  brainFilterToggle.addEventListener('click', () => {
+    const expanded = brainFilterToggle.getAttribute('aria-expanded') !== 'true';
+    brainFilterToggle.setAttribute('aria-expanded', String(expanded));
+    brainFilterPanel.classList.toggle('hidden', !expanded);
+    brainElement('brain-filter-chevron')?.classList.toggle('rotate-180', expanded);
+  });
+}
 brainElement('brain-mode-search').addEventListener('click', () => setBrainMode('search'));
 brainElement('brain-mode-journals').addEventListener('click', () => setBrainMode('journals'));
 brainElement('brain-mode-tasks').addEventListener('click', () => setBrainMode('tasks'));

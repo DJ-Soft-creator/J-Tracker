@@ -39,3 +39,42 @@ services:
       - ENVIRONMENT=dev
     user: "1000"
     command: ["python", "/app/scripts/scheduler.py", "--loop"]
+
+  whisper-dev:
+    profiles: ["whisper"]
+    build: ./whisper_service
+    image: journl-whisper:latest
+    container_name: journl-whisper-dev
+    restart: unless-stopped
+    env_file:
+      - /docker-storage/my_Journal_data_DEV/data/journals/.env
+    environment:
+      - WHISPER_MODEL=${WHISPER_MODEL:-base}
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-int8}
+      - WHISPER_CPU_THREADS=${WHISPER_CPU_THREADS:-4}
+    ports:
+      - "${WHISPER_PORT:-8091}:8090"
+    volumes:
+      - whisper-models-dev:/models
+
+  whisper-scheduler-dev:
+    profiles: ["whisper"]
+    image: journaling-tracker-dev:latest
+    container_name: journl-whisper-scheduler-dev
+    restart: unless-stopped
+    user: "1000"
+    depends_on: [whisper-dev]
+    env_file:
+      - /docker-storage/my_Journal_data_DEV/data/journals/.env
+    volumes:
+      - /docker-storage/my_Journal_data_DEV/data/journals/:/app/data
+    environment:
+      - TZ=Europe/Berlin
+      - DATA_DIR=/app/data
+      - WHISPER_URL=http://whisper-dev:8090
+      - WHISPER_SCHEDULE_HOUR=${WHISPER_SCHEDULE_HOUR:-11}
+      - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-de}
+    command: ["python", "/app/scripts/whisper-scheduler.py", "--loop"]
+
+volumes:
+  whisper-models-dev:

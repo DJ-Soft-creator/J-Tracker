@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 import re
 import tokenize
 from pathlib import Path
@@ -96,9 +97,6 @@ def report(path: Path, text: str, terms: list[re.Pattern], source: str) -> int:
     for line_no, line in enumerate(text.splitlines(), 1):
         for pattern in terms:
             if pattern.search(line):
-                if source == "comments":
-                    # generic_comments/tokenize results are supplied below; this branch is unused
-                    pass
                 snippet = line.strip().replace("\t", " ")
                 print(f"{source}: {path}:{line_no}: {snippet[:240]}")
                 hits += 1
@@ -109,11 +107,18 @@ def report(path: Path, text: str, terms: list[re.Pattern], source: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", nargs="?", type=Path, default=Path("."))
-    parser.add_argument("--term", action="append", dest="terms", default=None,
-                        help="case-insensitive term (repeatable)")
+    parser.add_argument("--term", action="append", dest="terms",
+                        help="case-insensitive term to search for (repeatable). "
+                             "Alternatively set SCAN_TERMS as a comma-separated list.")
     args = parser.parse_args()
     root = args.root.resolve()
-    patterns = [re.compile(re.escape(term), re.IGNORECASE) for term in args.terms]
+
+    terms = args.terms or [
+        term.strip() for term in os.environ.get("SCAN_TERMS", "").split(",") if term.strip()
+    ]
+    if not terms:
+        parser.error("no search terms given: pass --term or set SCAN_TERMS")
+    patterns = [re.compile(re.escape(term), re.IGNORECASE) for term in terms]
     totals = {"comments": 0, "config": 0}
 
     for path in sorted(p for p in root.rglob("*") if p.is_file() and not any(part in SKIP_DIRS for part in p.parts)):

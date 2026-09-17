@@ -1,0 +1,632 @@
+/* Mobile Shell von Journl: Viewport-, Safe-Area- und Tab-Layout.
+ * Aus app/templates/index.html ausgelagert, weil das Template sonst ueber die
+ * 1000-Zeilen-Grenze laeuft. Die einzige umgebungsabhaengige Angabe - der
+ * Hintergrund in DEV/PROD - kommt als --journl-shell-bg aus dem Template.
+ * Desktop hat eine eigene Shell und teilt diese Datei nicht.
+ */
+:root {
+  --app-height: 100vh;
+  --app-width: 100vw;
+  --app-offset-top: 0px;
+  --app-offset-left: 0px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+
+/* Tastatur offen: der Home-Indicator liegt hinter dem Keyboard, sein Inset
+ * wuerde nur einen leeren Streifen zwischen Tab-Leiste und Tastatur erzeugen.
+ * Die Klasse setzt app/static/mobile-app-core.js. */
+html.keyboard-open {
+  --safe-bottom: 0px;
+}
+
+@supports (height: 100dvh) {
+  :root { --app-height: 100dvh; }
+}
+
+@supports (width: 100dvw) {
+  :root { --app-width: 100dvw; }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  overscroll-behavior-x: none;
+  /* DEV rot, PROD fast schwarz - gesetzt vom Template. */
+  background: var(--journl-shell-bg);
+}
+
+/* Body owns VisualViewport offsets; overlays are positioned inside this shell. */
+body {
+  position: absolute;
+  top: var(--app-offset-top);
+  right: auto;
+  bottom: auto;
+  left: var(--app-offset-left);
+  width: var(--app-width);
+  max-width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  height: var(--app-height);
+  min-height: 0;
+  margin: 0;
+  overflow: hidden !important;
+  overscroll-behavior: none;
+  overscroll-behavior-x: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+input, textarea, select { max-width: 100%; font-size: 16px !important; }
+#brain-filter-controls select { font-size: 0.75rem !important; }
+button { max-width: 100%; }
+
+#app,
+#app > *,
+main,
+.tab-content,
+#input-area,
+#mobile-controls-scroll,
+#dashboard-container,
+#family-container,
+#brain-app,
+#brain-browser {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Die Kopfleiste haelt ihren Inhalt unterhalb der Dynamic Island: der
+ * Safe-Area-Inset endet an deren Unterkante, die 0.25rem darunter sind die
+ * Luft, damit der Burger sicher antippbar bleibt. Der Mindestwert greift auf
+ * Geraeten ohne Notch, die keinen Inset melden. */
+#app > header {
+  padding-top: calc(max(1.5rem, var(--safe-top)) + 0.25rem);
+  padding-right: max(1rem, var(--safe-right));
+  padding-bottom: 0.25rem;
+  padding-left: max(1rem, var(--safe-left));
+}
+
+#app > nav {
+  min-width: 0;
+  position: relative;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+  padding-top: 0.125rem;
+  padding-right: var(--safe-right);
+  padding-bottom: max(var(--safe-bottom), 0.25rem);
+  padding-left: var(--safe-left);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.2);
+}
+
+#app > nav > button {
+  display: grid;
+  place-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  width: 2.25rem;
+  height: 2rem;
+  min-height: 0;
+  padding: 0;
+  border-radius: 0.5rem;
+  overflow-wrap: anywhere;
+  touch-action: manipulation;
+}
+
+#burger-btn {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.25rem;
+  margin-right: -0.5rem;
+  touch-action: manipulation;
+}
+
+main, .tab-content { min-height: 0; }
+
+#input-area {
+  display: flex;
+  position: relative;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
+  padding-right: max(1rem, var(--safe-right));
+  padding-left: max(1rem, var(--safe-left));
+}
+
+#mobile-controls-scroll {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 55%;
+  padding-bottom: 0.5rem;
+  scroll-padding-bottom: 1rem;
+}
+
+/* The editor uses all space not needed by the action row. */
+#simple-input,
+#form-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+#simple-input { height: 100%; }
+
+
+#mobile-controls-scroll > div {
+  padding-right: max(1rem, var(--safe-right));
+  padding-left: max(1rem, var(--safe-left));
+}
+
+/* The write action row stays fixed below the editor; only the AI
+   response inside #mobile-controls-scroll may scroll. */
+#write-actions-row {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding-right: max(1rem, var(--safe-right));
+  padding-left: max(1rem, var(--safe-left));
+}
+
+#write-primary-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  align-items: center;
+  column-gap: 0.375rem;
+  row-gap: 0.5rem;
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+}
+
+#write-primary-actions button,
+#write-primary-actions select {
+  min-height: 2.5rem;
+  touch-action: manipulation;
+}
+
+#write-primary-actions button {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+#write-primary-actions > #ai-controls:not(.hidden) {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: center;
+}
+
+@media (max-width: 359px) {
+  #write-primary-actions {
+    column-gap: 0.25rem;
+  }
+  #template-select-wrap,
+  #resume-write-session,
+  #write-hashtag-quick-button {
+    width: 2.25rem;
+  }
+  #submit-btn,
+  #write-edit-cancel {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+}
+
+/* Die Anhang-Huelle darf dem Editor nie den Platz nehmen. Sie stand als
+ * flex-none in einer Spalte, deren Hoehe bei offener Tastatur auf den
+ * VisualViewport schrumpft - Leiste plus Lesefassung schoben das Schreibfeld
+ * dann auf null, und getippt werden konnte gar nichts mehr. Jetzt gibt die
+ * Huelle nach und scrollt selbst. */
+#write-media-shell {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 40%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: max(1rem, var(--safe-right));
+  padding-left: max(1rem, var(--safe-left));
+}
+
+html.keyboard-open #write-media-shell { max-height: 30%; }
+
+/* Auf dem Handy scrollt die Huelle, nicht die Lesefassung darin - sonst
+ * liegen zwei Scrollflaechen uebereinander. */
+#write-media-transcript [data-transcript-text] {
+  max-height: none;
+  overflow: visible;
+}
+
+#write-media-toggle {
+  min-height: 2rem;
+  touch-action: manipulation;
+}
+
+#write-media-strip {
+  overscroll-behavior-x: contain;
+  touch-action: pan-x pan-y;
+}
+
+#write-screenshot-inbox-suggestion {
+  flex: 0 0 auto;
+  min-height: 2.75rem;
+  max-width: calc(100% - var(--safe-left) - var(--safe-right) - 2rem);
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+  padding: 0.5rem 1rem;
+  white-space: normal;
+  line-height: 1.25rem;
+  touch-action: manipulation;
+}
+
+#write-media-shell:not(.hidden) ~ #mobile-controls-scroll,
+#write-screenshot-inbox-suggestion:not(.hidden) ~ #mobile-controls-scroll {
+  max-height: 60%;
+}
+
+/* Attachments belong to the row they are sent with, so they move down to
+   the action row instead of hovering under the editor. */
+#write-media-shell:not(.hidden) ~ #write-actions-row,
+#write-screenshot-inbox-suggestion:not(.hidden) ~ #write-actions-row {
+  padding-top: 0.5rem;
+}
+
+#dashboard-container {
+  padding-right: max(1rem, var(--safe-right));
+  padding-bottom: max(0.75rem, var(--safe-bottom));
+  padding-left: max(1rem, var(--safe-left));
+}
+
+#tab-family > div:first-child,
+#family-toolbar,
+#family-container {
+  padding-right: max(1rem, var(--safe-right));
+  padding-left: max(1rem, var(--safe-left));
+}
+
+#family-container { padding-bottom: max(0.75rem, var(--safe-bottom)); }
+
+#tab-brain > div:first-child,
+#brain-browser { padding-right: max(1rem, var(--safe-right)); padding-left: max(1rem, var(--safe-left)); }
+
+#input-area,
+#mobile-controls-scroll,
+#dashboard-container,
+#family-container,
+#settings-modal > div,
+#editor-modal > div > div:nth-child(2),
+#shopping-container,
+#planner-modal > div > div:nth-child(2) {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+#login-overlay,
+#settings-modal,
+#editor-modal,
+#shopping-modal,
+#planner-modal {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: auto;
+  left: 0;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+#login-overlay {
+  padding-top: max(1rem, var(--safe-top));
+  padding-right: max(1rem, var(--safe-right));
+  padding-bottom: max(1rem, var(--safe-bottom));
+  padding-left: max(1rem, var(--safe-left));
+  overflow-y: auto;
+}
+
+#login-overlay > div {
+  min-width: 0;
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+#settings-modal,
+#editor-modal {
+  padding-top: max(1rem, var(--safe-top));
+  padding-right: max(1rem, var(--safe-right));
+  padding-bottom: max(1rem, var(--safe-bottom));
+  padding-left: max(1rem, var(--safe-left));
+  overflow: hidden;
+}
+
+.dialog-panel {
+  min-width: 0;
+  min-height: 0;
+  max-height: min(90vh, 100%);
+}
+
+#editor-modal > div > div:nth-child(2),
+#planner-modal > div > div:nth-child(2) { min-height: 0; }
+
+#planner-modal {
+  padding-top: var(--safe-top);
+  padding-right: var(--safe-right);
+  padding-left: var(--safe-left);
+  overflow: hidden;
+}
+
+.planner-panel {
+  min-width: 0;
+  min-height: 0;
+  max-height: min(94vh, 100%);
+  max-height: min(94dvh, 100%);
+  padding-bottom: var(--safe-bottom);
+}
+
+#shopping-modal { overflow: hidden; }
+
+#shopping-modal > div:first-child {
+  padding-top: calc(0.75rem + var(--safe-top));
+  padding-right: max(1.25rem, var(--safe-right));
+  padding-left: max(1.25rem, var(--safe-left));
+}
+
+#shopping-container {
+  min-width: 0;
+  min-height: 0;
+  padding-right: max(1.25rem, var(--safe-right));
+  padding-bottom: max(1rem, var(--safe-bottom));
+  padding-left: max(1.25rem, var(--safe-left));
+}
+
+#template-select-wrap { flex: none; width: 2.5rem; }
+#template-select { width: 100%; }
+#template-select-wrap:hover span { color: #e5e7eb; }
+#ai-controls > select { flex: 1 1 12rem; width: 100%; min-width: 0; }
+
+#ai-response-area,
+#dashboard-container,
+#family-container,
+#settings-modal,
+#editor-modal,
+#shopping-modal,
+#planner-modal {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#login-overlay *,
+#burger-menu *,
+#form-container *,
+#dashboard-container *,
+#family-container *,
+#settings-modal *,
+#editor-modal *,
+#shopping-modal *,
+#planner-modal * {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#toast {
+  position: fixed;
+  top: calc(var(--safe-top) + .75rem);
+  bottom: auto;
+  width: max-content;
+  max-width: calc(100% - var(--safe-left) - var(--safe-right) - 2rem);
+  max-height: 4.75rem;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+@media (min-width: 640px) {
+  #tab-family > div:first-child,
+  #family-toolbar,
+  #family-container {
+    padding-right: max(3.125rem, var(--safe-right));
+    padding-left: max(3.125rem, var(--safe-left));
+  }
+
+  #planner-modal {
+    padding-top: max(1rem, var(--safe-top));
+    padding-right: max(1rem, var(--safe-right));
+    padding-bottom: max(1rem, var(--safe-bottom));
+    padding-left: max(1rem, var(--safe-left));
+  }
+
+  .planner-panel { padding-bottom: 0; }
+}
+
+@media (max-width: 360px) {
+#app > nav > button { font-size: 1.25rem; }
+}
+
+
+html, body, #app, main, .tab-content {
+  overflow-x: hidden;
+  overflow-x: clip;
+}
+
+.tab-btn.active { border-top-color: #4ade80; color: #4ade80; background-color: rgba(74, 222, 128, 0.08); }
+.form-field { margin-bottom: 1rem; }
+.form-field label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.25rem; color: #d1d5db; }
+.form-field input, .form-field textarea, .form-field select {
+  width: 100%; border-radius: 0.5rem; background-color: #1f2937; border: 1px solid #374151; padding: 0.625rem 0.875rem; color: #f3f4f6; outline: none;
+}
+.form-field input:focus, .form-field textarea:focus, .form-field select:focus { box-shadow: 0 0 0 2px #22c55e; border-color: #4ade80; }
+::-webkit-scrollbar { width: 0; height: 0; }
+
+@keyframes wipeOut {
+  0%   { opacity: 1; transform: translateY(0); filter: blur(0); }
+  60%  { opacity: 0; transform: translateY(-8px); filter: blur(4px); }
+  100% { opacity: 0; transform: translateY(-8px); filter: blur(4px); }
+}
+
+.wipe-out {
+  animation: wipeOut 0.35s ease-out forwards;
+}
+
+.journal-family-tag { color: #f9a8d4; }
+.journal-approved-tag { color: #86efac; }
+.journal-proposed-tag { color: #fdba74; }
+.journal-ai-tag { color: #bae6fd; }
+.journal-ai-text { color: #bae6fd; }
+/* Inline Markdown for Home and Brain cards (containers stay pre-wrap). */
+.journal-md-heading { font-weight: 600; color: #f3f4f6; }
+.journal-md-h1 { font-size: 1.2em; }
+.journal-md-h2 { font-size: 1.1em; }
+.journal-md-h3 { font-size: 1.03em; }
+.journal-md-marker { color: #6b7280; }
+.journal-md-done { color: #6b7280; text-decoration: line-through; }
+.journal-md-quote { color: #9ca3af; font-style: italic; border-left: 2px solid #4b5563; padding-left: .5rem; }
+.journal-md-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em;
+  background: rgba(31, 41, 55, .8); border-radius: .25rem; padding: 0 .25em;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone;
+}
+.journal-md-link { color: #7dd3fc; text-decoration: underline; }
+.journal-md-rule { display: inline-block; width: 100%; border-top: 1px solid #374151; vertical-align: middle; }
+.journal-md-table-wrap { display: block; max-width: 100%; margin: .4rem 0; overflow-x: auto; }
+.journal-md-table { border-collapse: collapse; white-space: normal; font-size: .95em; }
+.journal-md-table th, .journal-md-table td { border: 1px solid #374151; padding: .2rem .55rem; vertical-align: top; }
+.journal-md-table th { background: rgba(31, 41, 55, .7); color: #e5e7eb; font-weight: 600; text-align: left; }
+/* Familie-Karte: Inhaltsbereich oeffnet den Markdown-Editor, der freie
+   Notiztext steht unter den Aufgaben und wird eingeklappt angerissen. */
+.family-card-body { cursor: text; }
+.family-notes-clamp {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;
+  line-clamp: 4; overflow: hidden;
+}
+/* Schreiben-Tab, Lesefassung: gerendertes Markdown statt Rohtext, damit
+   Links anklickbar sind. Siehe write-read-mode.js. */
+.write-read-pane {
+  box-sizing: border-box; width: 100%; min-width: 0;
+  white-space: pre-wrap; overflow-wrap: break-word;
+  color: #f3f4f6; line-height: 1.625;
+  overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-color: #4b5563 transparent; scrollbar-width: thin;
+}
+.write-read-pane::-webkit-scrollbar { width: 8px; }
+.write-read-pane::-webkit-scrollbar-track { background: transparent; }
+.write-read-pane::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 999px; }
+#input-area > .write-read-pane { min-height: 10.5rem; max-height: 45vh; }
+.write-hashtag-editor { position: relative; isolation: isolate; min-width: 0; width: 100%; }
+.write-hashtag-textarea { height: 100%; min-height: 0; }
+#input-area > .write-primary-editor,
+#input-surface > .write-primary-editor { flex: 1 1 auto; min-height: 4rem; }
+.write-primary-editor .write-hashtag-input { height: 100%; }
+.write-hashtag-highlight {
+  position: absolute; inset: 0; z-index: 2; overflow: hidden; pointer-events: none;
+  box-sizing: border-box; white-space: pre-wrap; overflow-wrap: break-word;
+  color: transparent; background: transparent;
+}
+.write-hashtag-highlight-content { display: block; min-width: 100%; will-change: transform; }
+.write-hashtag-input {
+  position: relative; z-index: 1; background: transparent !important; color: #f3f4f6 !important;
+  -webkit-text-fill-color: currentColor; caret-color: #86efac; text-shadow: none;
+}
+.write-hashtag-input::placeholder { color: #9ca3af; opacity: .82; transition: opacity .18s ease; }
+.write-hashtag-input:focus::placeholder { opacity: .58; }
+.write-hashtag-input::selection { background: rgba(74, 222, 128, .32); color: #f3f4f6; }
+.write-hashtag-editor.is-composing .write-hashtag-highlight,
+.write-hashtag-editor.has-selection .write-hashtag-highlight { visibility: hidden; }
+.write-hashtag-highlight span { -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+/* A caret inside a hashtag would sit behind the opaque mask, so the overlay
+   redraws it at the same offset (see write-hashtags.js). */
+.write-hashtag-caret { position: relative; }
+.write-hashtag-caret::before {
+  content: ''; position: absolute; left: -1px; top: 0; bottom: 0; width: 2px;
+  border-radius: 1px; background: #86efac;
+  animation: writeHashtagCaretBlink 1.05s linear infinite;
+}
+@keyframes writeHashtagCaretBlink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+#write-hashtag-menu {
+  overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin; scrollbar-color: #4b5563 transparent;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .32), 0 0 0 1px rgba(255, 255, 255, .025);
+}
+/* The overlay covers tag zones, so spellcheck stays visible for prose but
+   cannot draw through a hashtag's solid background. */
+.write-hashtag-ai { color: #bae6fd; background: #164e63; border-radius: .2em; }
+.write-hashtag-knowledge { color: #ddd6fe; background: #4c1d95; border-radius: .2em; }
+.write-hashtag-write-target { color: #fde68a; background: #78350f; border-radius: .2em; }
+.write-hashtag-family { color: #f9a8d4; background: #831843; border-radius: .2em; }
+.write-hashtag-approved { color: #86efac; background: #166534; border-radius: .2em; }
+.write-hashtag-proposal { color: #fdba74; background: #9a3412; border-radius: .2em; }
+.write-hashtag-unrecognised { color: #d1d5db; background: #111827; border-radius: .2em; }
+.write-session-actions { display: flex; align-items: center; gap: .5rem; flex: 0 0 auto; }
+.write-session-actions.is-source-edit #resume-write-session {
+  display: grid; place-items: center; width: 2.5rem; padding: 0; border-radius: 9999px;
+}
+.write-session-actions.is-source-edit:not(.is-expanded) .write-session-action {
+  width: 0; margin: 0; padding: 0; overflow: hidden; opacity: 0; border-width: 0;
+  pointer-events: none; transform: translateX(-.35rem);
+}
+.write-session-actions.is-source-edit.is-expanded .write-session-action,
+.write-session-actions.is-source-edit .write-session-action.is-recording {
+  width: 2.5rem; opacity: 1; pointer-events: auto; transform: translateX(0);
+}
+.write-session-actions.is-source-edit .write-session-action.is-recording { overflow: visible; border-width: 1px; }
+.brain-family-entry { border-color: rgba(244, 114, 182, 0.35); background-color: rgba(131, 24, 67, 0.16); }
+@keyframes writeAiGlow {
+  0%, 100% { box-shadow: 0 0 5px rgba(255,255,255,.12), 0 0 10px rgba(74,222,128,.16); }
+  50% { box-shadow: 0 0 12px rgba(255,255,255,.48), 0 0 24px rgba(74,222,128,.44); }
+}
+.write-ai-working { animation: writeAiGlow 6s cubic-bezier(.4, 0, .6, 1) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .write-ai-working { animation: none; box-shadow: 0 0 10px rgba(74,222,128,.35); }
+  .write-hashtag-input::placeholder { transition: none; }
+  .write-hashtag-caret::before { animation: none; }
+}
+/* Deep Write Mode (Toggle im "⋯"-Menue): alles um den Editor herum verliert
+   Saettigung und Praesenz, der Text selbst bleibt unangetastet. Reine Farbe und
+   Deckkraft - Groessen und Klickflaechen aendern sich nicht, und beim Hovern
+   oder Fokussieren kommt jedes Bedienelement sofort voll zurueck. */
+.deep-write :is(header, nav, #write-actions-row) :is(button, select, img, select + span),
+.deep-write #write-screenshot-inbox-suggestion {
+  filter: saturate(.3);
+  opacity: .4;
+  transition: filter .25s ease, opacity .25s ease;
+}
+.deep-write :is(header, nav, #write-actions-row) :is(button, select, img):is(:hover, :focus, :focus-visible),
+.deep-write #write-actions-row select:hover + span,
+.deep-write #write-screenshot-inbox-suggestion:is(:hover, :focus, :focus-visible),
+.deep-write #burger-menu button {
+  filter: none;
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .deep-write :is(header, nav, #write-actions-row) :is(button, select, img, select + span),
+  .deep-write #write-screenshot-inbox-suggestion { transition: none; }
+}
+/* A DEV-only presentation layer.  It only replaces red DEV paint; no data
+   source, endpoint or credential changes with this class. */
+html.youtube-mode, .youtube-mode body { background: #030712 !important; }
+.youtube-mode .bg-red-950 { background-color: #030712 !important; }
+.youtube-mode .bg-red-900 { background-color: #111827 !important; }
+#agent-project-panel {
+  flex: 0 1 auto;
+  min-height: 6rem;
+  max-height: 45%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+#ap-turns { max-height: 22rem; overflow-y: auto; overscroll-behavior: contain; }

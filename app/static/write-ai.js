@@ -47,7 +47,8 @@
       const expectedRevision = draftRevision;
       const res = await window.apiFetch('/api/write-ai/draft', {
         method: 'POST',
-        body: JSON.stringify({ content, revision: expectedRevision })
+        body: JSON.stringify({ content, revision: expectedRevision }),
+        timeoutMs: 30000,
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -131,13 +132,11 @@
         }
       });
     }
-    const controls = document.getElementById('write-ai-job-actions');
-    if (controls) controls.classList.add('hidden');
     const button = document.getElementById('submit-btn');
     if (button) {
-      button.disabled = false;
       button.classList.remove('write-ai-working');
       button.setAttribute('aria-busy', 'false');
+      window.writeSubmitState?.refresh();
     }
   }
 
@@ -160,7 +159,7 @@
 
   async function refreshWorkflows() {
     try {
-      const res = await window.apiFetch('/api/brain/tag-catalog');
+      const res = await window.apiFetch('/api/brain/tag-catalog', { timeoutMs: 30000 });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return;
       // KI-Modus dispatches by the hashtag definition itself.  Existing
@@ -183,10 +182,9 @@
     // Once another template owns the shared button, an old AI request must not
     // enable, disable or relabel that template's in-flight submission.
     if (!isWritingMode()) return;
-    button.disabled = busy;
     button.classList.toggle('write-ai-working', busy);
     button.setAttribute('aria-busy', String(busy));
-    button.textContent = busy ? 'KI arbeitet…' : 'KI Senden';
+    if (!window.writeSubmitState?.isActive()) button.textContent = 'KI Senden';
     if (busy) { status.classList.remove('hidden'); status.textContent = 'KI-Anfrage wird vorbereitet – du kannst weiter schreiben.'; }
   }
 
@@ -199,60 +197,71 @@
     return null;
   }
 
+  // The shared ⋯ menu (#write-media-menu) hosts the assistant entry above
+  // „Im Hintergrund an KI senden“; job items (cancel/undo/apply) only appear
+  // while a host job is active. Returns the hidden job block (or null until
+  // the media menu exists).
   function jobActionControls() {
-    let controls = document.getElementById('write-ai-job-actions');
-    if (controls) return controls;
-    const submit = document.getElementById('submit-btn');
-    if (!submit?.parentElement) return null;
-    controls = document.createElement('div');
-    controls.id = 'write-ai-job-actions';
-    controls.className = 'relative hidden shrink-0';
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'h-10 w-9 rounded-lg border border-gray-700/60 text-gray-300 hover:bg-gray-800';
-    toggle.textContent = '⋯';
-    toggle.title = 'KI-Job-Aktionen';
-    toggle.setAttribute('aria-label', 'KI-Job-Aktionen');
-    const menu = document.createElement('div');
-    menu.className = 'absolute right-0 z-30 mt-1 hidden min-w-36 rounded-lg border border-gray-700 bg-gray-900 p-1 shadow-xl';
+    const menu = document.getElementById('write-media-menu');
+    if (!menu) {
+      setTimeout(jobActionControls, 50);
+      return null;
+    }
+    let block = menu.querySelector('[data-job-block]');
+    if (block) return block;
+    const assistant = document.createElement('button');
+    assistant.type = 'button'; assistant.dataset.jobAction = 'assistant';
+    assistant.className = 'block w-full px-3 py-2 text-left text-sm text-green-300 hover:bg-green-950/50';
+    assistant.textContent = 'An Agent senden';
+    const backgroundAgent = menu.querySelector('[data-background-agent]');
+    if (backgroundAgent) backgroundAgent.insertAdjacentElement('beforebegin', assistant);
+    else menu.prepend(assistant);
+    assistant.addEventListener('click', () => {
+      menu.classList.add('hidden');
+      if (typeof window.openAssistantFromWriteTab === 'function') window.openAssistantFromWriteTab();
+    });
+    const separator = document.createElement('div');
+    separator.className = 'my-1 border-t border-gray-700';
+    separator.setAttribute('role', 'separator');
     const cancel = document.createElement('button');
     cancel.type = 'button'; cancel.dataset.jobAction = 'cancel';
-    cancel.className = 'hidden w-full rounded px-3 py-2 text-left text-xs text-red-300 hover:bg-red-950/50 disabled:opacity-50';
+    cancel.className = 'hidden w-full rounded px-3 py-2 text-left text-sm text-red-300 hover:bg-red-950/50 disabled:opacity-50';
     cancel.textContent = 'Abbrechen';
     const undo = document.createElement('button');
     undo.type = 'button'; undo.dataset.jobAction = 'undo';
-    undo.className = 'hidden w-full rounded px-3 py-2 text-left text-xs text-sky-200 hover:bg-sky-950/50';
+    undo.className = 'hidden w-full rounded px-3 py-2 text-left text-sm text-sky-200 hover:bg-sky-950/50';
     undo.textContent = 'Rückgängig';
     const apply = document.createElement('button');
     apply.type = 'button'; apply.dataset.jobAction = 'apply';
-    apply.className = 'hidden w-full rounded px-3 py-2 text-left text-xs text-amber-200 hover:bg-amber-950/50';
+    apply.className = 'hidden w-full rounded px-3 py-2 text-left text-sm text-amber-200 hover:bg-amber-950/50';
     apply.textContent = 'Vorschlag anwenden';
-    toggle.addEventListener('click', () => menu.classList.toggle('hidden'));
     cancel.addEventListener('click', () => cancelHostJob());
     undo.addEventListener('click', () => undoCancelledHostJob());
     apply.addEventListener('click', () => applyHostProposal());
-    menu.append(cancel, undo, apply); controls.append(toggle, menu);
-    submit.insertAdjacentElement('afterend', controls);
-    return controls;
+    block = document.createElement('div');
+    block.dataset.jobBlock = '';
+    block.className = 'hidden';
+    block.append(separator, cancel, undo, apply);
+    assistant.insertAdjacentElement('afterend', block);
+    return block;
   }
 
   function renderJobActions(job) {
-    const controls = jobActionControls();
-    if (!controls) return;
-    const cancel = controls.querySelector('[data-job-action="cancel"]');
-    const undo = controls.querySelector('[data-job-action="undo"]');
-    const menu = controls.querySelector('div');
-    const apply = controls.querySelector('[data-job-action="apply"]');
+    const block = jobActionControls();
+    if (!block) return;
+    const cancel = block.querySelector('[data-job-action="cancel"]');
+    const undo = block.querySelector('[data-job-action="undo"]');
+    const apply = block.querySelector('[data-job-action="apply"]');
     const cancellable = ['queued', 'running', 'cancelling'].includes(job?.status);
     const undoable = job?.status === 'cancelled' && job?.can_undo;
     const applicable = job?.status === 'proposed' && job?.can_apply;
-    controls.classList.toggle('hidden', !cancellable && !undoable && !applicable);
+    // The ⋯ menu itself stays visible in the writing tab; only job items hide.
+    block.classList.toggle('hidden', !cancellable && !undoable && !applicable);
     cancel.classList.toggle('hidden', !cancellable);
     cancel.disabled = job?.status === 'cancelling';
     cancel.textContent = job?.status === 'cancelling' ? 'Abbruch angefragt' : 'Abbrechen';
     undo.classList.toggle('hidden', !undoable);
     apply.classList.toggle('hidden', !applicable);
-    if (!cancellable && !undoable) menu.classList.add('hidden');
   }
 
   async function applyHostProposal() {
@@ -356,7 +365,7 @@
     const status = document.getElementById('ai-response-area');
     for (let attempt = 0; attempt < 360; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      const response = await window.apiFetch(`/api/write-ai/jobs/${encodeURIComponent(jobId)}`);
+      const response = await window.apiFetch(`/api/write-ai/jobs/${encodeURIComponent(jobId)}`, { timeoutMs: 30000 });
       const job = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(job.error || 'KI-Job konnte nicht gelesen werden.');
       if (activeHostJob?.id === jobId) {
@@ -388,22 +397,39 @@
   async function submitWritingAi() {
     const field = editor();
     if (!field?.value.trim()) { safeShow('Bitte Text eingeben.', true); return; }
-    await refreshWorkflows();
-    const selected = workflowFromText(field.value);
-    if (!selected) { safeShow('Bitte einen konfigurierten #ai-Hashtag in den Text schreiben.', true); return; }
-    const [workflowTag, workflow] = selected;
-    const useHostWorker = workflow.agent === 'pi' || workflow.provider_id === '__host_worker__';
-    const provider = (window.config?.ai_providers || []).find((item) => item.id === workflow.provider_id)
-      || (window.config?.ai_providers || []).find((item) => item.model === workflow.model);
-    if (!useHostWorker && !provider) { safeShow(`Für #${workflowTag} ist kein passender KI-Anbieter konfiguriert.`, true); return; }
-    clearTimeout(draftTimer);
-    await saveDraft();
-    const snapshot = field.value;
-    const requestEpoch = aiModeEpoch;
+    if (activeHostJob && ['queued', 'running', 'cancelling'].includes(activeHostJob.status)) {
+      safeShow('Der vorhandene KI-Auftrag läuft bereits – du kannst weiter schreiben.');
+      return;
+    }
+    const submitToken = window.writeSubmitState?.begin({
+      scope: 'ai',
+      readyText: 'KI Senden',
+      busyText: 'KI arbeitet…',
+      activeMessage: 'Die KI-Anfrage läuft bereits – du kannst weiter schreiben.',
+      timeoutMs: 390000,
+      timeoutMessage: 'Die KI-Anfrage wurde im Browser freigegeben. Dein Text bleibt erhalten.',
+      onTimeout: () => { aiRequestInFlight = false; setBusy(false); },
+    });
+    if (!submitToken) return;
     aiRequestInFlight = true;
     setBusy(true);
     try {
-      const res = await window.apiFetch('/api/write-ai/submit', { method: 'POST', body: JSON.stringify({ workflow_tag: workflowTag, provider_id: useHostWorker ? '__host_worker__' : provider.id, model: useHostWorker ? workflow.model : provider.model, context_type: 'draft', text: snapshot, revision: draftRevision }) });
+      await refreshWorkflows();
+      const selected = workflowFromText(field.value);
+      if (!selected) { safeShow('Bitte einen konfigurierten #ai-Hashtag in den Text schreiben.', true); return; }
+      const [workflowTag, workflow] = selected;
+      const useHostWorker = workflow.agent === 'pi' || workflow.provider_id === '__host_worker__';
+      const provider = (window.config?.ai_providers || []).find((item) => item.id === workflow.provider_id)
+        || (window.config?.ai_providers || []).find((item) => item.model === workflow.model);
+      if (!useHostWorker && !provider) { safeShow(`Für #${workflowTag} ist kein passender KI-Anbieter konfiguriert.`, true); return; }
+      clearTimeout(draftTimer);
+      await saveDraft();
+      const snapshot = field.value;
+      const requestEpoch = aiModeEpoch;
+      const writeSessionId = await window.writeSessionForSubmit?.(snapshot);
+      const payload = { workflow_tag: workflowTag, provider_id: useHostWorker ? '__host_worker__' : provider.id, model: useHostWorker ? workflow.model : provider.model, context_type: 'draft', text: snapshot, revision: draftRevision, whisper_model: window.journlWhisperModel?.() };
+      if (writeSessionId) payload.write_session_id = writeSessionId;
+      const res = await window.apiFetch('/api/write-ai/submit', { method: 'POST', body: JSON.stringify(payload), timeoutMs: 120000 });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { safeShow(data.error || 'KI-Anfrage fehlgeschlagen.', true); return; }
       if (data.queued) {
@@ -437,7 +463,11 @@
       if (status) { status.classList.remove('hidden'); status.textContent = error?.cancelled ? message : `KI-Fehler: ${message}`; }
       safeShow(message, !error?.cancelled);
     }
-    finally { aiRequestInFlight = false; setBusy(false); }
+    finally {
+      aiRequestInFlight = false;
+      setBusy(false);
+      window.writeSubmitState?.finish(submitToken);
+    }
   }
 
   document.addEventListener('keydown', (event) => {
@@ -477,8 +507,13 @@
   const waitForPage = setInterval(() => {
     if (typeof window.handleAiMode !== 'function' || typeof window.handleSubmit !== 'function') return;
     clearInterval(waitForPage);
+    // The assistant entry and job items live in the shared #write-media-menu
+    // (added lazily when the menu exists).
+    jobActionControls();
     const oldAiMode = window.handleAiMode;
-    window.handleAiMode = function () {
+    window.handleAiMode = async function () {
+      if (typeof window.prepareTemplateHashtagsForAiMode === 'function'
+          && !await window.prepareTemplateHashtagsForAiMode()) return false;
       const field = editor();
       const handoffContent = field?.value || '';
       const handoffIsUserInput = editorUserEdited;
@@ -496,6 +531,7 @@
       if (!activeHostJob || !['queued', 'running', 'cancelling'].includes(activeHostJob.status)) {
         document.getElementById('submit-btn').textContent = isWritingMode() ? 'KI Senden' : 'Senden';
       }
+      return true;
     };
     const oldTemplateChange = window.handleTemplateChange;
     window.handleTemplateChange = function (template) {
@@ -504,7 +540,10 @@
       editorUserEdited = false;
     };
     const oldSubmit = window.handleSubmit;
-    window.handleSubmit = function () { return isWritingMode() ? submitWritingAi() : oldSubmit(); };
+    window.handleSubmit = function (options = {}) { return isWritingMode() ? submitWritingAi() : oldSubmit(options); };
+    // Lets the shared template-select listener leave the KI-Modus cleanly when
+    // switching to another special mode (e.g. the assistant).
+    window.leaveWriteAiMode = function () { if (editorMode === 'ai') leaveWritingAiMode(); };
     window.resumeWriteAiSession = function (content) {
       const field = editor();
       const select = document.getElementById('template-select');

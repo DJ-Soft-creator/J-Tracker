@@ -7,8 +7,7 @@
 **/*.py[cod]
 **/.DS_Store
 **/.ruff_cache
-FeatureRequest_Archiv
+archive
 Screenshots
 tests
 *.md
-deploy_JTracker_Opencode-Docker_int.sh

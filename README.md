@@ -1,121 +1,128 @@
-# Journaling Tracker
+# Journl
 
-![Screenshot der Anwendung](<Screenshot_Version 3-2-1.png>)
+![Journl Logo](Screenshots/neues_Logo_light_dark.png)
 
-Eine lokale Web-App zum Führen eines digitalen Journals mit Markdown-Support, mehreren Template-Varianten und optionaler KI-Integration.
+Eine selbst gehostete Web-App für ein digitales Journal: Markdown-Dateien als
+Datenbestand, mehrere Eingabe-Templates, Familienplanung, lokale Volltextsuche
+und optionale KI — mit lokalen Modellen statt Cloud-Zwang.
 
-Architektur, Datenfluesse, Invarianten, bekannte Risiken und der LLM-Onboarding-Guide stehen in [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md).
+**Markdown ist die maßgebliche Datenquelle.** Alle Indizes, Hashtag-Kataloge und
+Suchbeschleuniger sind jederzeit aus den Dateien neu aufbaubar. Wer die App
+abschaltet, behält lesbare Textdateien in einer Ordnerstruktur nach Datum.
 
-https://youtu.be/iT8kh9ieWuw
+Kurze Demo: https://youtu.be/iT8kh9ieWuw
+
+| Weiterführend | Inhalt |
+|---|---|
+| [docs/DESIGN.md](docs/DESIGN.md) | Farbschema und Komponentenspezifikation des Dark-Only-Designs |
+| [docs/features/share-api.md](docs/features/share-api.md) | Share-API: HTTP-Vertrag, Rechte, Dateiformate, iPhone-Kurzbefehle |
+| [docs/features/mcp-api.md](docs/features/mcp-api.md) | MCP-Server für Journale und Familiendokumente |
+| [docs/features/brain-chat.md](docs/features/brain-chat.md) | Chat mit den eigenen Notizen |
+| [docs/features/screenshot-upload-api.md](docs/features/screenshot-upload-api.md) | Screenshot-Eingang |
 
 ## Funktionen
 
-- **Tägliche Journaleinträge** — Automatische Speicherung in `data/Jahr/Monat/Tag/Journal_YYYY-MM-DD.md`
-- **Mehrere Templates** — Schnell, Aufgabe, Nebengedanke, Thema, Brainablage, Idee, Erkenntnis + benutzerdefinierte Formulare
-- **KI-Integration** — OpenAI-kompatible API für KI-generierte Antworten (konfigurierbar über `config.json` oder Umgebungsvariablen)
-- **Dashboard** — Alle Einträge des Tages mit Inline-Bearbeitung und Löschfunktion
-- **Authentifizierung** — HTTP-only Session mit CSRF-Schutz und Login-Rate-Limiting
-- **Responsive Design** — Desktop (mausoptimiert) und Mobile (touch-optimiert)
-- **Dark Mode Only** — Durchgängiges "Midnight"-Design mit grünem Akzent
+### Schreiben und Lesen
+
+- **Tägliche Journaleinträge** — Ablage unter `<user-id>/Jahr/Monat/Tag/Journal_YYYY-MM-DD.md`, Einträge durch `___` getrennt
+- **Mehrere Templates** — Schnell, Aufgabe, Nebengedanke, Thema, Brainablage, Idee, Erkenntnis sowie eigene Formulare
+- **Schreibsessions & Medien** — Geräteübergreifende Entwürfe, private Fotos und chunkweise hochgeladene Sprachnachrichten
+- **Ansicht beim Start** — Schreibfeld, Lesefassung oder (nur Desktop) beides nebeneinander; die Wahl hängt am Gerät, nicht am Konto
+- **Versionshistorie** — Frühere Fassungen eines Tages ansehen und wiederherstellen, inklusive der zugehörigen Medien
+- **Dashboard „Heute"** — Alle Einträge des Tages mit Inline-Bearbeitung und Löschfunktion
+- **Bildschirmschoner / Fokus-Kulisse** — Vollflächige Diashow aus dem Burger-Menü, wahlweise mit Schreibfeld über den Bildern. Die Bilder holt und cacht der Server (Wikimedia-Themen, eigene Ordner unter `DATA_DIR/screensaver/`, eigene Journalbilder), damit die CSP dicht bleibt und die Diashow offline weiterläuft
+
+### Suche und Struktur
+
+- **Brain** — Lokale Volltextsuche, Timeline, Aufgaben- und Tag-Explorer über die erlaubten Markdown-Quellen, mit Editor im selben Tab
+- **Hashtags** — `#stichwort` mitten im Text, mit Katalog, Alias, Ersetzen und optionaler KI-Verschlagwortung (siehe unten)
+- **Sammelmappen** — Themenmappen und Tagesablage über das Burger-Menü; das Einsammeln übernimmt `scripts/bucket-scheduler.py`
+- **Lokales Whisper** — Optionaler CPU-Dienst mit API-Key und Zeitmarken; der Zeitplan ist in den Einstellungen umstellbar (stündlich, täglich zu einer Uhrzeit, nur manuell)
+
+### Familie
+
 - **Familien-Planung** — Einmalige und wiederkehrende Aufgaben mit Verantwortlichkeit, Startdatum, Vorschau, Pausieren und Bearbeiten
-- **Daily Scheduler** — Idempotente Aufgabenerzeugung per Compose-Service und zusätzlicher Prüfung beim Öffnen des Familienbereichs
-- **Brain View** — Lokale Volltextsuche, Timeline, Aufgaben- und Tag-Explorer über erlaubte Markdown-Quellen mit In-Tab-Editor
-- **Schreibsessions & Medien** — Geräteübergreifende Entwürfe, private Fotos, chunkweise Sprachnachrichten und geschützte Darstellung in Heute
-- **Lokales Whisper** — Optionaler CPU-Dienst mit API-Key, Zeitmarken und täglicher Transkription um 11:00 Uhr
+- **Board mit Buckets** — Aufgaben, Projekte, Notizen und Einkaufslisten als ein Dateityp, unterschieden durch `type` im Frontmatter
+- **Daily Scheduler** — Idempotente Aufgabenerzeugung als Compose-Service, zusätzlich geprüft beim Öffnen des Familienbereichs
+
+### KI (optional, bevorzugt lokal)
+
+- **KI-Anbieter in der Oberfläche** — Endpunkte, Modelle und Standard-Agent unter Burger → AI-Worker → Anbieter. API-Schlüssel verlassen den Server nie; nach außen geht nur, *ob* ein Schlüssel hinterlegt ist
+- **Schreib-Agent** — Arbeitet auf dem Text im Schreibfeld, erreichbar aus Schreiben, Heute und Brain. Mehrere Wissens-Hashtags, Schreibziele aus der `config.json`, Wahl des Agenten. **Er speichert nichts**: das Ergebnis kommt als Vorschlag und landet erst mit „Übernehmen" im Feld
+- **Einkaufslisten-Agent** — Sortieren, doppelte Artikel zusammenfassen, ergänzen, umbenennen, abhaken. Sortiert nach dem eigenen Ladenaufbau, sobald eine Notiz hinter einem Knowledge-Hashtag liegt. Legt vor dem ersten Schreibzugriff einen Wiederherstellungspunkt an
+- **Chat with your Notes** — Chatansicht im Brain-Tab, in der ein lokales Modell die eigenen Journale über dieselben Werkzeuge wie `/mcp/privat` beantwortet. Jeder Turn landet als `Chat_<datum>_<zeit>.md` im Tagesordner und ist über die Brain-Suche auffindbar
+- **KI-Verschlagwortung** — Ein lokales Modell trägt Hashtags für alte Journale nach, ohne Blocktext zu verändern
+- **Agent-Projekte („An Agent senden")** — Ein Projekt verbindet einen freigegebenen Linux-Ordner, den Modus Lesen/Schreiben/Ausführen, eine lokale Verbindung (LM Studio, Ollama, llama.cpp oder OpenAI-kompatibel) und optional Journal und gewählte Dateien als Kontext. `opencode run` oder Pi arbeiten über den Host-Worker
+- **Share-API & AI-Workflows** — Text, URLs, Audio, Bilder und Dokumente direkt ablegen oder per persönlichem Workflow als Journaleintrag verarbeiten
+- **Lange Läufe überleben ein gesperrtes Handy** — Verschlagwortung und Agentenaufträge laufen serverseitig; ihr Stand ist über `/api/runs*` jederzeit wieder abrufbar
+
+### Plattform
+
+- **Authentifizierung** — HTTP-only Session mit CSRF-Schutz und Login-Rate-Limiting
+- **Responsive** — Getrennte Oberflächen für Desktop (mausoptimiert) und Mobil (touch-optimiert)
+- **Dark Mode Only** — Durchgängiges „Midnight"-Design mit grünem Akzent
 
 ## Schnellstart
 
 ### Voraussetzungen
 
-- Docker & Docker Compose
-- `.env` Datei (siehe unten)
+- Docker und Docker Compose
+- Ein Verzeichnis für die Daten auf dem Host
+- Optional: ein OpenAI-kompatibler LLM-Endpunkt im eigenen Netz (LM Studio, Ollama, llama.cpp)
 
-### Mit Docker Compose starten
+### Starten
 
 ```bash
-# .env aus der Vorlage erstellen und anpassen
 cp .env.example .env
-
-# Container bauen und starten
+$EDITOR .env          # mindestens SECRET_KEY und JOURNAL_DATA_DIR setzen
 docker compose up -d --build
 ```
 
-Die App ist dann unter `http://localhost:4097` erreichbar (Port über `PORT` in `.env` anpassbar).
+Die App läuft danach auf `http://localhost:4097` (Port über `PORT` anpassbar).
 
-Der optionale Whisper-Dienst wird je Umgebung einmalig mit einem sicheren
-Initialisierungsskript aktiviert. Es erzeugt den API-Key, startet API und
-Scheduler, prüft den Dienst und lädt das Modell vor:
-
-```bash
-cd /docker-storage/Journal-Tracker-DEV
-sudo ./scripts/init-whisper.sh dev
-```
-
-Nach der Promotion wird PROD separat aus `/docker-storage/Journal-Tracker` mit
-`sudo ./scripts/init-whisper.sh prod` initialisiert. Seine OpenAI-ähnliche
-Transkriptions-API liegt standardmäßig auf Port 8091 (DEV) beziehungsweise 8090
-(PROD) und akzeptiert `POST /v1/audio/transcriptions` nur mit
-`Authorization: Bearer <key>`. Das maschinenlesbare Schema ist unter
-`GET /openapi.json` abrufbar. Vollständige Betriebs-, API- und Fehlerhinweise
-stehen in [scripts/README_whisper.md](scripts/README_whisper.md).
-
-### Server-Deployment
-
-Der Server verwendet zwei getrennte Git-Arbeitsverzeichnisse und Docker-Compose-Projekte:
-
-| Umgebung | Verzeichnis | Branch | Befehl |
-|----------|------------|--------|--------|
-| DEV | `/docker-storage/Journal-Tracker-DEV` | `dev-environment` | `scripts/deploy.sh dev` |
-| PROD | `/docker-storage/Journal-Tracker` | `prod` | `scripts/deploy.sh prod` |
-
-`scripts/deploy.sh promote` aktualisiert zuerst DEV, verschiebt `prod` ausschließlich
-per Fast-Forward auf denselben Commit und deployt anschließend PROD. Die Promotion wird
-abgebrochen, wenn versionierte lokale Änderungen bestehen oder PROD kein Vorfahr von DEV ist.
-Die persistenten Umgebungsdateien liegen unter
-`/docker-storage/my_Journal_data_DEV/data/journals/.env` (DEV) und
-`/docker-storage/my_Journal_data/data/journals/.env` (PROD).
-
-Lokale Änderungen können gezielt commitet und auf den zugehörigen Branch gepusht werden:
+`docker-compose.yml` erwartet die Umgebungsdatei standardmäßig im Datenverzeichnis
+des Betreibers. Für eine eigene Installation zeigt `JOURNL_ENV_FILE` auf die
+eigene `.env`:
 
 ```bash
-scripts/deploy.sh git-update dev
-scripts/deploy.sh git-update prod --message "Describe the change"
-scripts/deploy.sh git-update both --message "Describe the change"
+JOURNL_ENV_FILE=./.env JOURNAL_DATA_DIR=./data docker compose up -d --build
 ```
 
-Ohne `--message` fragt das Skript für jeden Commit nach einer Nachricht. Mit `both` und
-`--message` wird dieselbe Nachricht für beide einzelnen Commits verwendet.
+`config.json` muss vor dem ersten Start im Datenverzeichnis liegen — sie wird
+bewusst nie automatisch erzeugt oder überschrieben, damit ein Deployment eine
+bestehende Konfiguration nicht zerstören kann.
 
-### Public-GitHub aktualisieren
+### Whisper aktivieren (optional)
 
-Die freigegebenen Applikationsdateien können aus DEV in das lokale Public-
-Repository `/public-git/J-Tracker` synchronisiert und nach einer ausdrücklichen
-Bestätigung nach GitHub gepusht werden:
+Der Whisper-Dienst wird einmalig mit einem Initialisierungsskript aktiviert. Es
+erzeugt den API-Key, startet API und Scheduler, prüft den Dienst und lädt das
+Modell vor:
 
 ```bash
-scripts/deploy.sh public-update
-scripts/deploy.sh public-update --message "Synchronize application changes"
+sudo ./scripts/init-whisper.sh dev     # oder: prod
 ```
 
-Dabei werden nur die notwendigen Applikationsdateien, Tests und ausgewählte
-Scripts sowie `README.md` veröffentlicht. Interne Markdown-Dokumente,
-Feature-Request-Archive, Screenshots und private Host-Scripts werden
-übersprungen. Die Git-Historie von DEV wird nicht übernommen; das Public-
-Repository behält seine eigene `.git`-Historie. Vor Commit und Push zeigt das
-Skript eine Änderungsübersicht und fragt interaktiv nach Bestätigung.
+Die OpenAI-ähnliche Transkriptions-API liegt auf Port 8091 (DEV) beziehungsweise
+8090 (PROD) und akzeptiert `POST /v1/audio/transcriptions` nur mit
+`Authorization: Bearer <key>`. Das maschinenlesbare Schema steht unter
+`GET /openapi.json`. Betrieb, API und Fehlerbilder stehen in
+[scripts/README_whisper.md](scripts/README_whisper.md).
 
-Details zur Whitelist und zum Ablauf stehen in
-[`scripts/deploy-sh_Readme.md`](scripts/deploy-sh_Readme.md).
-
-### Lokal entwickeln
+### Ohne Docker entwickeln
 
 ```bash
 pip install -r requirements.txt
-cd app
-python main.py
+cd app && python main.py       # http://localhost:4098
 ```
 
-Server startet auf `http://localhost:4098`.
+Die Testsuite läuft ausschließlich im DEV-Image — auf dem blanken Host fehlen
+Flask, Pillow und psycopg, und übersprungene Tests melden trotzdem `OK`:
+
+```bash
+scripts/run-tests.sh                     # alles
+scripts/run-tests.sh tests.test_brain_api # gezielt
+scripts/run-tests.sh --db                # zusätzlich die PostgreSQL-Integrationstests
+```
 
 ## Konfiguration
 
@@ -128,6 +135,7 @@ Server startet auf `http://localhost:4098`.
 | `AUTH_PASS` | — | Optionales Passwort für die einmalige Account-Migration |
 | `PORT` | `4097` | Externer Port des Docker-Containers |
 | `TZ` | `Europe/Berlin` | Zeitzone für Server-Uhr und Journaleinträge |
+| `JOURNL_ENV_FILE` | Datenverzeichnis des Betreibers | Pfad zur `.env`, die Docker Compose in die Container lädt |
 | `JOURNAL_DATA_DIR` | `/docker-storage/my_Journal_data/data/journals/` | Host-Verzeichnis, das Docker Compose nach `/app/data` mountet |
 | `DATA_DIR` | `/app/data` | Gemeinsames Datenverzeichnis für Journale, Familienaufgaben und Planner |
 | `SCHEDULER_HOUR` | `6` | Lokale Ausführungsstunde des Scheduler-Services |
@@ -142,7 +150,22 @@ Server startet auf `http://localhost:4098`.
 | `BRAIN_INDEX_INTERVAL_SECONDS` | `3600` | Brain-Indexintervall in Sekunden (mindestens 300) |
 | `BRAIN_ARCHIVE_DIR` | `DATA_DIR/_Archiv/Projekte` | Optionaler read-only Pfad für externe Archivprojekte |
 
-### AI-Templates über Umgebungsvariablen
+### KI-Anbieter
+
+Anbieter werden in der Oberfläche unter **Burger → AI-Worker → Anbieter**
+gepflegt. Geschrieben wird dabei ausschließlich die rohe `config.json`, nie das
+Ergebnis mit eingesetzten Umgebungsvariablen — sonst wäre `{locale_LLM_IP}` beim
+ersten Speichern durch eine feste IP ersetzt.
+
+Ein Feld, das über die Umgebung gesetzt ist, bleibt in der Oberfläche gesperrt
+und wird als solches benannt, weil die Umgebung beim Start ohnehin gewinnt:
+
+```bash
+AI_PROVIDER_0_API_URL=http://192.168.1.50:1234/v1/chat/completions
+AI_KEY_LM_STUDIO=…                     # Schlüssel je Anbieter-ID
+```
+
+Ältere Installationen konfigurieren stattdessen `ai_templates`:
 
 ```bash
 AI_TEMPLATE_0_API_URL=http://localhost:1234/v1/chat/completions
@@ -154,12 +177,13 @@ AI_TEMPLATE_0_SYSTEM_PROMPT="Du bist ein hilfreicher Assistent."
 
 ### config.json
 
-Die Datei `config.json` liegt persistent im Datenverzeichnis neben `users.json`
-(im Container: `/app/data/config.json`) und enthält die Template-Definitionen
-und AI-Konfiguration. Sie muss vor dem Start der Anwendung dort vorhanden sein.
+Die Datei liegt persistent im Datenverzeichnis neben `users.json` (im Container
+`/app/data/config.json`) und enthält Template-Definitionen sowie die
+KI-Konfiguration:
 
-- **templates** — Formular-Templates (simple textareas oder strukturierte Formulare)
-- **ai_templates** — KI-API Konfigurationen mit Model, Prompt und Endpunkt
+- **templates** — Formular-Templates (einfache Textfelder oder strukturierte Formulare)
+- **ai_templates** / **ai_providers** — KI-Endpunkte mit Modell und Prompt
+- **ai_functions** — Schreibziele, die der Schreib-Agent anbietet
 
 ## Daten-Speicherung
 
@@ -174,6 +198,8 @@ Journaleinträge werden im Volume-Pfad gespeichert (standardmäßig `/app/data` 
     projects/Projekt.md
     write_sessions/<session-id>/session.json
     write_sessions/<session-id>/media/<media-id>/original.m4a
+    .share-jobs/<share-id>/metadata.json
+    2026/06/06/media/Sprachi/<zeit>_<share-id>_audio.m4a
 ```
 
 Einträge sind durch `___` getrennt. Backups werden als `.md.bak` im jeweiligen Tages-Unterordner `_Backup/` erstellt.
@@ -186,56 +212,164 @@ Brain-Tags, Prioritäten und Projektzuordnungen liegen ausschliesslich in
 Ein Benutzer kann dort mit `"admin": true` als Administrator markiert werden;
 ohne Feld oder mit `false` besitzt er keine gemeinsamen Verwaltungsrechte.
 
+## Hashtags
+
+Ein Hashtag ist einfach `#stichwort` mitten im Text — im Journal, in Notizen,
+Projekten und in Familiendokumenten. Journl liest sie beim Speichern aus, hängt
+je Journaldatei einen technischen Index-Footer an (HTML-Kommentar, in der
+Ansicht unsichtbar) und pflegt daraus `indexes/hashtag_index.json`. Der Footer
+und der Index sind reine Beschleuniger: Maßgeblich bleibt der Markdown-Text,
+beides ist jederzeit neu aufbaubar.
+
+Groß-/Kleinschreibung und Umlaute werden normalisiert (`#Idee`, `#idee` und
+`#IDEE` sind derselbe Tag), Leerzeichen werden zu `-`.
+
+### Katalog: Vorschlag, freigegeben, blockiert
+
+Jeder neue Hashtag landet zunächst als **Vorschlag** im Katalog. Unter
+**Brain → Hashtag-Katalog** wird er freigegeben, mit einem Alias verbunden oder
+blockiert.
+
+| Zustand | Bedeutung |
+|---|---|
+| Vorschlag | automatisch beim ersten Auftauchen; **sofort such- und filterbar** |
+| Freigegeben | bewusst ins Vokabular übernommen — steuert Einfärbung und Katalogpflege |
+| Blockiert | bleibt aus Index, Suche und Vorschlagsliste heraus |
+
+Eine Freigabe ist also kein Schalter für die Auffindbarkeit, sondern nur für die
+Kuratierung: Ein frisch getippter Tag ist genau dann findbar, wenn man noch
+überlegt, ob man ihn behalten will.
+
+### Alias statt Umbenennen
+
+Ändert sich der Sprachgebrauch, gibt es zwei Wege:
+
+- **Alias** (`alt → freigegebenes Ziel`): Der alte Tag bleibt in allen Dateien
+  stehen, Index, Suche und MCP zeigen aber nur noch das Ziel. Reversibel, keine
+  einzige Datei wird angefasst. Wirkt ab dem nächsten Index-Rebuild.
+- **Ersetzen** (**Brain → Hashtag ersetzen**): schreibt den Tag in Text *und*
+  Footer der ausgewählten Dokumente wirklich um — mit Vorschau je Dokument.
+  Gedacht für Tippfehler und echte Fehlvergaben.
+
+Faustregel: Alias, wenn sich die Bedeutung nur verschoben hat; Ersetzen, wenn
+der alte Name schlicht falsch war.
+
+### Zwei Kataloge
+
+Persönliche Journale und Familiendokumente führen getrennte Kataloge
+(`<user-id>/hashtag_catalog.json` bzw. `family/hashtag_catalog.json`). Ein
+Familien-Hashtag darf in einem persönlichen Journal vorkommen; umgekehrt bleiben
+persönliche Tags aus dem Familienbereich heraus. Die beiden MCP-Server folgen
+derselben Grenze (siehe [`docs/features/mcp-api.md`](docs/features/mcp-api.md)).
+
+### KI-Verschlagwortung und Herkunft
+
+**Brain → Hashtags nachtragen** lässt eine **lokale** LM-Studio-Instanz alte
+Journale verschlagworten. Wichtig dabei:
+
+- Die KI **verändert keinen Blocktext**. Ihre Zuordnung landet im technischen
+  Footer unter `ai`, neben den Hashtags aus dem Text. Genau deshalb kann ein
+  späterer Lauf seine eigenen Vorschläge ersetzen, ohne je einen selbst
+  getippten Tag anzufassen — und deshalb braucht es kein Sonderpräfix wie
+  `#_idee`: der Name bleibt derselbe, nur die Herkunft ist vermerkt.
+- **Analysiert wird ein ganzer Tag auf einmal**, nicht jeder Eintrag einzeln:
+  Alle Blöcke eines Journals gehen in einem Aufruf an das Modell, das für jeden
+  Zeitstempel antworten muss. Passt die Antwort nicht exakt auf alle Blöcke des
+  Tages, wird die Datei **gar nicht** geschrieben und als Fehler gemeldet — es
+  gibt keine halb getaggten Tage.
+- Der Lauf verarbeitet **ein Journal pro Anfrage** und ist jederzeit abbrechbar.
+  Jede fertige Datei wird mit `ai_run` gestempelt, der nächste Start macht dort
+  weiter. Rechenleistung, die nur zeitweise da ist, reicht also aus.
+- **Reverse-Proxy-Timeout beachten:** Ein Tag kann das Modell mehrere Minuten
+  beschäftigen (App-seitig sind 300 s erlaubt). Steht davor ein Proxy mit dem
+  üblichen 60-s-Lesetimeout, bekommt der Browser einen 504, obwohl der Server
+  weiterrechnet und die Datei fertig schreibt. In nginx entsprechend
+  `proxy_read_timeout 300s;` setzen (Nginx Proxy Manager: *Advanced*). Passiert
+  es doch, meldet die Oberfläche es als Zeitüberschreitung — einfach erneut
+  starten, der Lauf setzt beim nächsten offenen Tag fort.
+- Während des Laufs zeigt ein Protokoll je Tag, welcher Eintrag welche Hashtags
+  bekommen hat, welche schon im Text standen und welche Tage fehlgeschlagen
+  sind. **Nur ansehen** lässt das Modell laufen, ohne etwas zu schreiben.
+- Drei Modi: *Nur noch nicht getaggte* (Wiederaufnahme), *Alles neu bewerten*
+  und *Neu bewerten, wenn getaggt vor <Datum>* — letzteres, um alte Einträge auf
+  ein inzwischen gewachsenes Vokabular zu heben.
+- Das Modell bekommt die **freigegebenen** Tags als Vorgabe und darf neue
+  vorschlagen; die landen als Vorschlag im Katalog.
+
+Im **Brain-Tab** erscheinen diese Hashtags an der Karte wie alle anderen — nur
+violett und mit einem `*` markiert, weil sie eben nicht im Text stehen
+(„Von der KI vergeben"). Sie zählen auch für Tag-Filter und Trefferzahlen.
+Sichtbar werden sie nach dem nächsten Index-Rebuild, den ein Tagging-Lauf selbst
+anstößt.
+
+Die Herkunft überlebt spätere Bearbeitungen des Tages und auch das Umbenennen
+eines Hashtags. Über die MCP-Schnittstelle ist sie als `ai_tags` je Block
+sichtbar.
+
+### Besondere Präfixe
+
+Hashtags, die mit `ai-` beginnen, können als AI-Workflow, Wissensquelle oder
+Schreibziel konfiguriert werden — siehe
+[`docs/features/share-api.md`](docs/features/share-api.md).
+
 ## Automatisierung
 
-- [Family Scheduler](scripts/README_scheduler.md) - interner Compose-Service fuer wiederkehrende Familienaufgaben.
-- [Local Whisper](scripts/README_whisper.md) - privater CPU-Dienst, Initialisierung, API und 11-Uhr-Transkription.
-- [External Journal Monitor](scripts/README_journal_monitor.md) - hostseitiger Cron-Job fuer explizite Hermes- und OpenCode-Auftraege; nicht Bestandteil des Containers.
+- [Family Scheduler](scripts/README_scheduler.md) — interner Compose-Service für wiederkehrende Familienaufgaben
+- [Local Whisper](scripts/README_whisper.md) — privater CPU-Dienst, Initialisierung, API und täglicher Transkriptionslauf
+- [External Journal Monitor](scripts/README_journal_monitor.md) — hostseitiger Cron-Job für explizite Agentenaufträge; nicht Bestandteil des Containers
+- [Host-Worker auf einem zweiten Rechner](scripts/README_host_pi_worker.md) — führt Agentenaufträge außerhalb des Containers aus
 
-## API Endpunkte
+## API-Überblick
 
-| Methode | Pfad | Beschreibung | Auth |
-|---------|------|--------------|------|
-| `GET` | `/` | Hauptseite (Desktop/Mobile) | — |
-| `GET,POST` | `/login` | Login mit Username/Passwort | — |
-| `POST` | `/logout` | Session beenden | Session + CSRF |
-| `GET` | `/api/time` | Serverzeit (Europe/Berlin) | Session |
-| `GET` | `/api/health` | Health Check + Auth Status | — |
-| `GET` | `/api/config` | Template-Konfiguration laden | Session |
-| `POST` | `/api/submit` | Eintrag speichern | Session + CSRF |
-| `POST` | `/api/ai-submit` | KI-Anfrage stellen & Antwort speichern | Session + CSRF |
-| `POST` | `/api/dashboard/init` | Today's Journal-Datei erstellen | Session + CSRF |
-| `GET` | `/api/dashboard` | Alle heutigen Einträge lesen | Session |
-| `POST` | `/api/dashboard/edit` | Eintrag bearbeiten | Session + CSRF |
-| `POST` | `/api/dashboard/delete` | Eintrag löschen | Session + CSRF |
-| `GET` | `/api/brain/search` | Lokale Brain-Volltextsuche bzw. Timeline | Session |
-| `GET` | `/api/brain/tasks` | Sichtbare Markdown-Aufgaben | Session |
-| `GET` | `/api/brain/tags` | Sichtbare Tag-Anzahlen | Session |
-| `POST` | `/api/brain/task/toggle` | Original-Markdown-Aufgabe umschalten | Session + CSRF |
-| `POST` | `/api/brain/index/rebuild` | Asynchronen Index-Rebuild einplanen | Session + CSRF |
+Authentifizierung läuft über eine HTTP-only Session; schreibende Endpunkte
+verlangen zusätzlich den Header `X-CSRF-Token`. Die Tabelle nennt die Gruppen
+und je einen typischen Endpunkt — die vollständigen Verträge der öffentlichen
+Schnittstellen stehen in [docs/features/](docs/features/).
 
-Authentifizierung erfolgt über eine HTTP-only Session. Schreibende Endpunkte
-erfordern zusätzlich den Header `X-CSRF-Token`.
-
-Die Planner-Endpunkte liegen unter `/api/family/planner`. Details zur
-Ausführung und zum Markdown-Format stehen in der
-[Scheduler-Dokumentation](scripts/README_scheduler.md).
+| Gruppe | Beispiel | Zweck | Auth |
+|---|---|---|---|
+| Basis | `GET /api/health` | Health Check und Auth-Status | — |
+| Anmeldung | `GET,POST /login`, `POST /logout` | Session beginnen und beenden | teilweise Session + CSRF |
+| Konfiguration | `GET /api/config` | Template-Konfiguration laden | Session |
+| Schreiben | `POST /api/submit` | Eintrag speichern | Session + CSRF |
+| Heute | `GET /api/dashboard`, `POST /api/dashboard/edit` | Einträge des Tages lesen und ändern | Session (+ CSRF beim Schreiben) |
+| Historie | `GET /api/journals/<datum>/history` | Frühere Fassungen ansehen und wiederherstellen | Session (+ CSRF beim Schreiben) |
+| Brain | `GET /api/brain/search`, `POST /api/brain/index/rebuild` | Volltextsuche, Aufgaben, Tags, Index-Rebuild | Session (+ CSRF beim Schreiben) |
+| Brain-Chat | `POST /api/brain/chat/ask` | Frage an die eigenen Journale | Session + CSRF |
+| Familie | `GET /api/family/board`, `POST /api/family/project*` | Board, Buckets, Aufgaben, Einkaufslisten | Session (+ CSRF beim Schreiben) |
+| Planner | `/api/family/planner` | Wiederkehrende Aufgaben; Format in [README_scheduler.md](scripts/README_scheduler.md) | Session (+ CSRF beim Schreiben) |
+| Sammelmappen | `/api/buckets/*` | Themenmappen und Tagesablage | Session (+ CSRF beim Schreiben) |
+| Schreib-Agent | `POST /api/write-agent/ask` | Vorschlag zum Text im Schreibfeld | Session + CSRF |
+| Einkaufslisten-Agent | `POST /api/family/shopping-agent/<id>/ask` | Liste sortieren, zusammenfassen, ergänzen | Session + CSRF |
+| Agent-Projekte | `POST /api/agent-projects/<id>/submit` | Projekt-Turn für `opencode run` oder Pi einreihen | Session + CSRF |
+| Lange Läufe | `GET /api/runs/<id>` | Stand eines serverseitigen Laufs abfragen | Session |
+| Schreibsessions | `/api/write-sessions*` | Entwürfe, Fotos und Sprachnachrichten | Session (+ CSRF beim Schreiben) |
+| Bildschirmschoner | `GET /api/screensaver` | Bildquellen und Diashow | Session |
+| Share | `POST /api/share` | Text, URLs, Medien ablegen; siehe [share-api.md](docs/features/share-api.md) | Bearer-Schlüssel |
+| Screenshot-Eingang | `POST /api/screenshot-inbox` | siehe [screenshot-upload-api.md](docs/features/screenshot-upload-api.md) | Bearer-Schlüssel |
+| MCP | `POST /mcp/privat`, `POST /mcp/family` | Lesende Werkzeuge auf Journale bzw. Familiendokumente | Bearer-Schlüssel mit `mcp` bzw. `mcp_family` |
+| Konto | `GET /api/me/export`, `POST /api/me/delete` | Daten exportieren, Konto löschen | Session + CSRF |
 
 ## Sicherheit
 
-- **Rate Limiting** — Maximal 10 Login-Versuche pro IP innerhalb von 5 Minuten
-- **CSP Headers** — Content Security Policy mit Tailwind CDN Allowlist
+- **Rate Limiting** — maximal 10 Login-Versuche pro IP innerhalb von 5 Minuten
+- **CSRF** — schreibende Endpunkte verlangen `X-CSRF-Token`
+- **CSP-Header** — Content Security Policy mit Tailwind-CDN-Allowlist
 - **File Locking** — `fcntl.flock` für atomare Schreiboperationen
-- **Non-root Docker User** — App läuft als `appuser` im Container
-- **Session-Cookies** — HTTP-only, `SameSite=Lax` und in Production `Secure`
+- **Non-root im Container** — die App läuft als `appuser`
+- **Session-Cookies** — HTTP-only, `SameSite=Lax`, in Production `Secure`
+- **Agent-Endpunkte nur im eigenen Netz** — Container und Host-Worker prüfen unabhängig voneinander, dass eine konfigurierte Verbindung auf eine Loopback- oder private Adresse auflöst. Damit wird eine benutzerverwaltete Verbindung kein SSRF-Kanal
+- **API-Schlüssel bleiben auf dem Server** — nach außen geht nur, *ob* ein Schlüssel hinterlegt ist
+
+Ein `Secure`-Cookie setzt TLS voraus: hinter einem Reverse Proxy muss dieser die
+TLS-Terminierung übernehmen. Wer die App direkt über HTTP veröffentlicht, kann
+sich in Production nicht zuverlässig anmelden.
 
 ## Design
 
-Die App verwendet ein durchgängiges Dark-Only Design mit Tailwind CSS (CDN). Das vollständige Farbschema und die Komponentenspezifikation finden sich in `DESIGN.md`.
-
-## kurze Demo
-https://youtu.be/iT8kh9ieWuw
+Durchgängiges Dark-Only-Design mit Tailwind CSS. Farbschema und
+Komponentenspezifikation stehen in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Lizenz
 
-Eigenprojekt.
+Apache License 2.0 — siehe `LICENSE` und `NOTICE`.

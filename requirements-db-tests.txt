@@ -1,0 +1,8 @@
+# Abhängigkeiten des weiterhin aktiven, wegwerfbaren DB-Integrationstest-Stacks.
+# Die Datei bleibt vom normalen App-Image getrennt.
+SQLAlchemy==2.0.38
+alembic==1.14.1
+psycopg[binary]==3.2.6
+# Phase 12: local-only worker API end-to-end contract in the disposable stack.
+Flask==3.1.0
+Pillow==11.1.0

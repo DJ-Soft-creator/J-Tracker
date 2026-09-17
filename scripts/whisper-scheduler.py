@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transcribe Journl audio at 11:00 local time or after a manual trigger."""
+"""Transcribe Journl audio on the configured schedule or after a manual trigger."""
 
 import argparse
 import hashlib
@@ -7,11 +7,12 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -20,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
 import sys
 sys.path.insert(0, str(APP if APP.is_dir() else ROOT))
+import transcript_blocks  # noqa: E402
 from scheduling import path_lock, read_text_file, update_text_file, write_text_file  # noqa: E402
 
 
@@ -30,6 +32,9 @@ TZ_NAME = os.environ.get("TZ", "Europe/Berlin")
 WHISPER_URL = os.environ.get("WHISPER_URL", "http://whisper:8090").rstrip("/")
 WHISPER_API_KEY = os.environ.get("WHISPER_API_KEY", "")
 TRANSCRIPTION_HOUR = int(os.environ.get("WHISPER_SCHEDULE_HOUR", "11"))
+SCHEDULE_MODES = ("hourly", "daily", "off")
+MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+MEDIA_ID_RE = re.compile(r"^[0-9a-f-]{36}$")
 
 
 def _now():
@@ -47,12 +52,12 @@ def _write_json(path, value):
     write_text_file(path, json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
 
-def _multipart(file_path):
+def _multipart(file_path, model=None):
     boundary = "----journl-" + uuid.uuid4().hex
     parts = []
     def field(name, value):
         parts.extend([f"--{boundary}\r\n".encode(), f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(), str(value).encode(), b"\r\n"])
-    field("model", os.environ.get("WHISPER_MODEL", "base"))
+    field("model", model or os.environ.get("WHISPER_MODEL", "base"))
     field("language", os.environ.get("WHISPER_LANGUAGE", "de"))
     field("response_format", "verbose_json")
     mime = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
@@ -65,10 +70,10 @@ def _multipart(file_path):
     return boundary, b"".join(parts)
 
 
-def _call_whisper(file_path):
+def _call_whisper(file_path, model=None):
     if not WHISPER_API_KEY:
         raise RuntimeError("WHISPER_API_KEY is not configured")
-    boundary, body = _multipart(file_path)
+    boundary, body = _multipart(file_path, model)
     request = urllib.request.Request(
         WHISPER_URL + "/v1/audio/transcriptions", data=body, method="POST",
         headers={"Authorization": "Bearer " + WHISPER_API_KEY, "Content-Type": f"multipart/form-data; boundary={boundary}"},
@@ -89,34 +94,38 @@ def _apply_to_journal(user_id, item, transcript):
         return
     if not journal.is_file() or journal.is_symlink():
         return
-    marker = f'"id":"{item["id"]}"'
-    transcript_marker = f'<!-- jt:transcript {{"media_id":"{item["id"]}"}} -->'
     def update(current):
-        if marker not in current or transcript_marker in current:
+        # A re-run replaces the block it finds instead of adding a second one,
+        # which is what makes retrying a weak model with a better one possible.
+        updated, changed = transcript_blocks.upsert(
+            current, item["id"], transcript.get("text", ""), item.get("title"),
+        )
+        if not changed:
             return current
-        lines = current.splitlines()
-        for index, line in enumerate(lines):
-            if marker in line and "jt:media" in line:
-                backup = journal.parent / "_Backup" / f"{journal.stem}_backup_{uuid.uuid4().hex[:8]}{journal.suffix}.bak"
-                write_text_file(backup, current)
-                insert_at = min(len(lines), index + 2)
-                lines[insert_at:insert_at] = ["", transcript_marker, "### Transkript #Sprachnachricht #Transkription", transcript.get("text", "").strip()]
-                return "\n".join(lines) + ("\n" if current.endswith("\n") else "")
-        return current
+        backup = journal.parent / "_Backup" / f"{journal.stem}_backup_{uuid.uuid4().hex[:8]}{journal.suffix}.bak"
+        write_text_file(backup, current)
+        return updated
     update_text_file(journal, update)
     request_dir = DATA_DIR / "indexes" / "brain_rebuild_requests"
     request_file = request_dir / f"{hashlib.sha256(user_id.encode('utf-8')).hexdigest()}.json"
     _write_json(request_file, {"request_key": user_id})
 
 
-def pending(user_filter=None):
+def pending(user_filter=None, media_filter=None):
     locations = list(DATA_DIR.glob("*/*/*/*/media/Sprachi/*_metadata.json"))
     locations.extend(DATA_DIR.glob("*/*/*/*/.journal-media/*.json"))
     for metadata in locations:
         item = _read_json(metadata)
         if not isinstance(item, dict) or item.get("type") != "audio" or item.get("status") != "ready":
             continue
-        if item.get("transcription_status") == "completed" or (user_filter and item.get("user_id") != user_filter):
+        if user_filter and item.get("user_id") != user_filter:
+            continue
+        # An explicitly requested recording is transcribed again even though it
+        # already carries a transcript; that is the whole point of the request.
+        if media_filter:
+            if item.get("id") != media_filter:
+                continue
+        elif item.get("transcription_status") == "completed":
             continue
         yield metadata, item
 
@@ -148,12 +157,12 @@ def _transcript_path(metadata, item):
     return metadata.with_name(f"{item.get('id')}.transcript.json")
 
 
-def run(user_filter=None):
+def run(user_filter=None, model=None, media_filter=None):
     completed = errors = 0
-    for metadata, item in pending(user_filter):
+    for metadata, item in pending(user_filter, media_filter):
         with path_lock(metadata.parent / ".transcription", exclusive=True):
             current = _read_json(metadata)
-            if current.get("transcription_status") == "completed":
+            if not media_filter and current.get("transcription_status") == "completed":
                 continue
             original = _original_path(metadata, current)
             if not original:
@@ -161,7 +170,7 @@ def run(user_filter=None):
             current.update(transcription_status="running", transcription_started_at=_now().isoformat(timespec="seconds"))
             _write_json(metadata, current)
             try:
-                transcript = _call_whisper(original)
+                transcript = _call_whisper(original, model)
                 transcript_path = _transcript_path(metadata, current)
                 if not transcript_path:
                     raise RuntimeError("Invalid transcript path")
@@ -187,29 +196,93 @@ def _manual_triggers():
     except OSError as exc:
         logger.warning("Cannot read manual transcription triggers in %s: %s", root, exc)
         return []
-    users = []
+    requests = []
     for trigger in triggers:
         data = _read_json(trigger)
         if isinstance(data, dict) and data.get("user_id"):
-            users.append(data["user_id"])
+            requests.append(data)
         try:
             trigger.unlink(missing_ok=True)
         except OSError as exc:
             logger.warning("Cannot remove manual transcription trigger %s: %s", trigger, exc)
-    return users
+    return requests
+
+
+def _requested_media(request_data):
+    """Limit a manual run to the one recording the UI asked to redo."""
+    media_id = request_data.get("media_id")
+    if isinstance(media_id, str) and MEDIA_ID_RE.fullmatch(media_id.strip()):
+        return media_id.strip()
+    return None
+
+
+def _requested_model(request_data):
+    """Honour the quality step chosen in the UI for this manual run only."""
+    model = request_data.get("model")
+    if isinstance(model, str) and MODEL_NAME_RE.fullmatch(model.strip()):
+        return model.strip()
+    return None
+
+
+def _manual_status(request_data, status, **details):
+    user_id = request_data["user_id"]
+    value = {
+        "user_id": user_id,
+        "status": status,
+        "requested_at": request_data.get("requested_at"),
+        **details,
+    }
+    _write_json(DATA_DIR / "whisper_jobs" / "status" / f"{user_id}.json", value)
+
+
+def _schedule():
+    """Read the schedule the app writes; the deployed default stays the fallback.
+
+    The file is the only knob that may change at runtime, so it is read on every
+    pass instead of at start-up - a change in the settings takes effect within a
+    minute and does not need a container restart.
+    """
+    stored = _read_json(DATA_DIR / "whisper_jobs" / "schedule.json")
+    mode, hour = "daily", TRANSCRIPTION_HOUR
+    if isinstance(stored, dict):
+        if stored.get("mode") in SCHEDULE_MODES:
+            mode = stored["mode"]
+        if isinstance(stored.get("hour"), int) and 0 <= stored["hour"] <= 23:
+            hour = stored["hour"]
+    return mode, hour
+
+
+def _due_slot(mode, hour, now):
+    """Return the identifier of the run that is due now, or None."""
+    if mode == "hourly":
+        return now.strftime("%Y-%m-%dT%H")
+    if mode == "daily" and now.hour >= hour:
+        return now.date().isoformat()
+    return None
 
 
 def loop():
-    last_daily = None
+    last_slot = None
     while True:
         now = _now()
-        today = now.date().isoformat()
-        if now.hour >= TRANSCRIPTION_HOUR and last_daily != today:
-            logger.info("Starting daily transcription run")
-            logger.info("Daily result: %s", run())
-            last_daily = today
-        for user_id in _manual_triggers():
-            logger.info("Manual transcription result for %s: %s", user_id, run(user_id))
+        mode, hour = _schedule()
+        slot = _due_slot(mode, hour, now)
+        if slot and slot != last_slot:
+            logger.info("Starting scheduled transcription run (%s)", mode)
+            logger.info("Scheduled result: %s", run())
+            last_slot = slot
+        for request_data in _manual_triggers():
+            user_id = request_data["user_id"]
+            _manual_status(request_data, "running", started_at=_now().isoformat(timespec="seconds"))
+            result = run(user_id, _requested_model(request_data), _requested_media(request_data))
+            _manual_status(
+                request_data,
+                "completed",
+                completed_at=_now().isoformat(timespec="seconds"),
+                completed=result["completed"],
+                errors=result["errors"],
+            )
+            logger.info("Manual transcription result for %s: %s", user_id, result)
         time.sleep(30)
 
 

@@ -4,3 +4,14 @@ __pycache__/
 .ruff_cache/
 .opencode/
 .DS_Store
+
+# Eingereichte Tickets enthalten freien Journaltext und bleiben lokal.
+# Triagiertes (BACKLOG.md, sessions/) bleibt versioniert.
+docs/tickets/inbox/
+
+# Nur durch die globale Git-Ignore des Betreibers ausgeblendet - hier noch
+# einmal explizit, damit das Repo nicht von einer Nutzereinstellung abhaengt.
+.claude/settings.local.json
+
+# Leerer Mount-Rest aus docker-compose; gehoert nicht ins Repo.
+app/data/

@@ -4,18 +4,27 @@ services:
   journaling-tracker:
     build: .
     image: journaling-tracker:latest
-    container_name: journaling-tracker
+    container_name: journaling-tracker-prod
     restart: unless-stopped
     ports:
       - "${PORT:-4097}:4098"
     env_file:
-      - /docker-storage/my_Journal_data/data/journals/.env
+      - ${JOURNL_ENV_FILE:-/docker-storage/my_Journal_data/data/journals/.env}
     volumes:
       - ${JOURNAL_DATA_DIR:-/docker-storage/my_Journal_data/data/journals/}:/app/data
+      - ${JOURNL_DB_LOCK_DIR:-/docker-storage/my_Journal_lock_data}:/runtime-locks
+      # Gemeinsamer Ticket-Eingang von DEV und PROD: bewusst derselbe Host-Pfad
+      # wie in docker-compose.dev.yml, damit Tickets aus beiden Umgebungen an
+      # einer Stelle auflaufen. Nur dieser Unterordner, nie das Repo selbst.
+      - ${JOURNL_TICKETS_DIR:-/docker-storage/Journal-Tracker-DEV/docs/tickets/inbox/}:/app/tickets
     environment:
       - TZ=Europe/Berlin
       - DATA_DIR=/app/data
       - ENVIRONMENT=prod
+      - POSTGRES_HOST=postgres
+      - JOURNL_DB_LOCK_ROOT=/runtime-locks
+      - TICKETS_DIR=/app/tickets
+      - WHISPER_URL=http://whisper:8090
     user: "1000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4098/api/health')"]
@@ -27,10 +36,10 @@ services:
   family-scheduler:
     build: .
     image: journaling-tracker:latest
-    container_name: journaling-tracker-scheduler
+    container_name: journaling-tracker-scheduler-prod
     restart: unless-stopped
     env_file:
-      - /docker-storage/my_Journal_data/data/journals/.env
+      - ${JOURNL_ENV_FILE:-/docker-storage/my_Journal_data/data/journals/.env}
     volumes:
       - ${JOURNAL_DATA_DIR:-/docker-storage/my_Journal_data/data/journals/}:/app/data
     environment:
@@ -40,16 +49,38 @@ services:
     user: "1000"
     command: ["python", "/app/scripts/scheduler.py", "--loop"]
 
+  # This is deliberately opt-in.  A normal production code deployment remains
+  # file-only until the operator explicitly selects the database profile and
+  # runs the reviewed migration procedure.
+  postgres:
+    profiles: ["database"]
+    image: postgres:16.8-alpine
+    container_name: journl-postgres-prod
+    restart: unless-stopped
+    env_file:
+      - ${JOURNL_ENV_FILE:-/docker-storage/my_Journal_data/data/journals/.env}
+    environment:
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-prod-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
   whisper:
     profiles: ["whisper"]
     build: ./whisper_service
     image: journl-whisper:latest
-    container_name: journl-whisper
+    container_name: journl-whisper-prod
     restart: unless-stopped
     env_file:
-      - /docker-storage/my_Journal_data/data/journals/.env
+      - ${JOURNL_ENV_FILE:-/docker-storage/my_Journal_data/data/journals/.env}
     environment:
       - WHISPER_MODEL=${WHISPER_MODEL:-base}
+      - WHISPER_MODELS=${WHISPER_MODELS:-tiny,base,small,medium}
       - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-int8}
       - WHISPER_CPU_THREADS=${WHISPER_CPU_THREADS:-4}
     ports:
@@ -57,15 +88,29 @@ services:
     volumes:
       - whisper-models:/models
 
+  bucket-scheduler:
+    image: journaling-tracker:latest
+    container_name: journl-bucket-scheduler-prod
+    restart: unless-stopped
+    user: "1000"
+    depends_on: [journaling-tracker]
+    volumes:
+      - ${JOURNAL_DATA_DIR:-/docker-storage/my_Journal_data/data/journals/}:/app/data
+    environment:
+      - TZ=Europe/Berlin
+      - DATA_DIR=/app/data
+      - BUCKET_HOUR=${BUCKET_HOUR:-0}
+    command: ["python", "/app/scripts/bucket-scheduler.py", "--loop"]
+
   whisper-scheduler:
     profiles: ["whisper"]
     image: journaling-tracker:latest
-    container_name: journl-whisper-scheduler
+    container_name: journl-whisper-scheduler-prod
     restart: unless-stopped
     user: "1000"
     depends_on: [whisper]
     env_file:
-      - /docker-storage/my_Journal_data/data/journals/.env
+      - ${JOURNL_ENV_FILE:-/docker-storage/my_Journal_data/data/journals/.env}
     volumes:
       - ${JOURNAL_DATA_DIR:-/docker-storage/my_Journal_data/data/journals/}:/app/data
     environment:
@@ -78,3 +123,4 @@ services:
 
 volumes:
   whisper-models:
+  postgres-prod-data:

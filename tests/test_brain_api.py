@@ -1,4 +1,7 @@
+"""Brain search, catalog, file and editor API behavior tests."""
+
 import importlib.util
+import hashlib
 import json
 import os
 import sys
@@ -16,122 +19,19 @@ if FLASK_AVAILABLE:
     os.environ.setdefault("SECRET_KEY", "brain-api-test-secret")
     os.environ.setdefault("DATA_DIR", "/tmp/opencode/journl-brain-api-import")
     sys.path.insert(0, str(ROOT_DIR / "app"))
+    import background_runs
     import brain
     import family
     import main
 
 
-@unittest.skipUnless(FLASK_AVAILABLE, "Flask is not installed")
-class BrainApiTests(unittest.TestCase):
-    def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.data_dir = Path(self.temp_dir.name)
-        self._old_main_data_dir = main.DATA_DIR
-        self._old_users_path = main.USERS_PATH
-        self._old_brain_data_dir = brain.DATA_DIR
-        self._old_brain_family_dir = brain.FAMILY_DIR
-        self._old_tagging_data_dir = brain.tagging_module.DATA_DIR
-        self._old_tagging_family_dir = brain.tagging_module.FAMILY_DIR
-        self._old_tagging_index_path = brain.tagging_module.INDEX_PATH
-        self._old_tagging_snapshot = brain.tagging_module._snapshot
-        self._old_family_data_dir = family.DATA_DIR
-        self._old_family_dir = family.FAMILY_DIR
-        self._old_family_projects_dir = family.PROJECTS_DIR
-        self._old_family_planner_dir = family.PLANNER_DIR
-        self._old_family_archive_dir = family.ARCHIVE_DIR
-        self._old_family_planner_file = family.PLANNER_FILE
-        self._old_family_tasks_file = family.FAMILY_TASKS_FILE
-        main.DATA_DIR = self.data_dir
-        main.USERS_PATH = self.data_dir / "users.json"
-        brain.DATA_DIR = self.data_dir
-        brain.FAMILY_DIR = self.data_dir / "family"
-        brain.tagging_module.DATA_DIR = self.data_dir
-        brain.tagging_module.FAMILY_DIR = self.data_dir / "family"
-        brain.tagging_module.INDEX_PATH = self.data_dir / "indexes/hashtag_index.json"
-        brain.tagging_module._snapshot = None
-        family.DATA_DIR = self.data_dir
-        family.FAMILY_DIR = self.data_dir / "family"
-        family.PROJECTS_DIR = family.FAMILY_DIR / "projects"
-        family.PLANNER_DIR = family.FAMILY_DIR / "planner"
-        family.ARCHIVE_DIR = family.FAMILY_DIR / "archive"
-        family.PLANNER_FILE = family.PLANNER_DIR / "recurring.md"
-        family.FAMILY_TASKS_FILE = family.FAMILY_DIR / "Familien-Aufgaben.md"
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        main.USERS_PATH.write_text(json.dumps({
-            "users": [
-                {"id": "user-a", "username": "Alex", "password": "test"},
-                {"id": "user-b", "username": "Bea", "password": "test"},
-            ]
-        }), encoding="utf-8")
-        self._write_sources()
-        main.app.config.update(TESTING=True, SESSION_COOKIE_SECURE=False)
-        self.client = main.app.test_client()
-        with self.client.session_transaction() as session:
-            session["user_id"] = "user-a"
-            session["csrf_token"] = "csrf-test"
-        self.enqueue = mock.patch.object(brain, "enqueue_rebuild", return_value=True)
-        self.enqueue.start()
+try:
+    from .brain_api_case import BrainApiCase
+except ImportError:  # unittest discovery adds tests/ directly to sys.path
+    from brain_api_case import BrainApiCase
 
-    def tearDown(self):
-        self.enqueue.stop()
-        main.DATA_DIR = self._old_main_data_dir
-        main.USERS_PATH = self._old_users_path
-        brain.DATA_DIR = self._old_brain_data_dir
-        brain.FAMILY_DIR = self._old_brain_family_dir
-        brain.tagging_module.DATA_DIR = self._old_tagging_data_dir
-        brain.tagging_module.FAMILY_DIR = self._old_tagging_family_dir
-        brain.tagging_module.INDEX_PATH = self._old_tagging_index_path
-        brain.tagging_module._snapshot = self._old_tagging_snapshot
-        family.DATA_DIR = self._old_family_data_dir
-        family.FAMILY_DIR = self._old_family_dir
-        family.PROJECTS_DIR = self._old_family_projects_dir
-        family.PLANNER_DIR = self._old_family_planner_dir
-        family.ARCHIVE_DIR = self._old_family_archive_dir
-        family.PLANNER_FILE = self._old_family_planner_file
-        family.FAMILY_TASKS_FILE = self._old_family_tasks_file
-        self.temp_dir.cleanup()
 
-    @property
-    def headers(self):
-        return {"X-CSRF-Token": "csrf-test"}
-
-    def _write(self, relative, content):
-        path = self.data_dir / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        return path
-
-    def _write_sources(self):
-        self._write(
-            "user-a/hashtag_catalog.json",
-            json.dumps({"version": 1, "canonical": ["focus", "work"], "aliases": {}, "proposals": ["unapproved"]}),
-        )
-        self.journal_path = self._write(
-            "user-a/2026/08/03/Journal_2026-08-03.md",
-            "# Journal 2026-08-03\n\n"
-            "___\n\n"
-            "## Thema: Time:10:00:00\n"
-            "Visible journal text\n"
-            "  - [ ] Personal task #work\n\n"
-            "___\n\n"
-            "___\n\n"
-            "## Brainablage: Tags: Focus, Work **Datum & Uhrzeit: 2026-08-03 11:00:00**\n"
-            "Stored note\n\n"
-            "___\n",
-        )
-        self._write("user-a/projects/alpha.md", "# Alpha\n\n- [ ] Project task\n")
-        self._write("user-a/notes/keep.md", "# Keep\n\nA lasting note.\n")
-        self._write("user-a/notes/README.md", "Technical note that must not be indexed.\n")
-        self._write("_Archiv/Projekte/reference.md", "# Reference\n\nArchive text.\n")
-        self._write(
-            "family/projects/visible.md",
-            "---\nassigned_users: [user-a]\n---\n\n# Visible Family\n\n- [ ] Family visible task\n",
-        )
-        self._write(
-            "family/projects/secret.md",
-            "---\nassigned_users: [user-b]\n---\n\n# Secret Family\n\nSecret family text #secret\n",
-        )
-
+class BrainApiTests(BrainApiCase):
     def test_search_timeline_and_tag_counts_only_include_allowed_sources(self):
         timeline = self.client.get("/api/brain/search")
         self.assertEqual(timeline.status_code, 200)
@@ -147,6 +47,116 @@ class BrainApiTests(unittest.TestCase):
         self.assertEqual({item["kind"] for item in results if item["path"] == "notes/keep.md"}, {"note"})
         self.assertEqual({item["kind"] for item in results if item["path"] == "projects/alpha.md"}, {"project"})
         self.assertEqual(next(item["source_label"] for item in results if item["path"] == "reference.md"), "Archiv")
+
+    def test_a_models_hashtag_is_visible_on_the_card_and_marked_as_machine_origin(self):
+        import tagging
+
+        content = self.journal_path.read_text(encoding="utf-8")
+        body, _ = tagging.strip_footer(content)
+        # Mirrors a tagging run: the model's tag joins the block's own tags, and
+        # the ``ai`` map records that it was the model who added it.
+        blocks = [
+            {**block, "raw_tags": sorted(set(block["raw_tags"]) | {"focus"})}
+            if block["anchor"] == "2026-08-03 11:00:00" else block
+            for block in tagging.journal_blocks(body, "2026-08-03")
+        ]
+        self.journal_path.write_text(
+            body.rstrip() + "\n\n" + tagging.render_footer(
+                blocks, [tagging.read_catalog("user-a")],
+                {"2026-08-03 11:00:00": ["focus"]}, "2026-08-03T09:00:00+00:00",
+            ),
+            encoding="utf-8",
+        )
+        brain.rebuild_user_index("user-a")
+
+        results = self.client.get("/api/brain/search").get_json()["results"]
+        card = next(item for item in results if "Stored note" in item["snippet"])
+
+        # The tag is nowhere in the block text, so it can only come from the footer.
+        self.assertNotIn("#focus", card["snippet"])
+        self.assertIn("focus", card["tags"])
+        self.assertEqual(card["ai_tags"], ["focus"])
+
+    def _tag_block_by_model(self, tag, anchor="2026-08-03 11:00:00"):
+        """Write ``tag`` into the footer as a machine hashtag, like a tagging run."""
+        import tagging
+
+        tagging.propose_tags("user-a", [tag])
+        content = self.journal_path.read_text(encoding="utf-8")
+        body, _ = tagging.strip_footer(content)
+        blocks = [
+            {**block, "raw_tags": sorted(set(block["raw_tags"]) | {tag})}
+            if block["anchor"] == anchor else block
+            for block in tagging.journal_blocks(body, "2026-08-03")
+        ]
+        self.journal_path.write_text(
+            body.rstrip() + "\n\n" + tagging.render_footer(
+                blocks, [tagging.read_catalog("user-a")],
+                {anchor: [tag]}, "2026-08-03T09:00:00+00:00",
+            ),
+            encoding="utf-8",
+        )
+        brain.rebuild_user_index("user-a")
+
+    def test_plain_search_finds_a_hashtag_that_only_lives_in_the_footer(self):
+        self._tag_block_by_model("kifokus")
+
+        results = self.client.get("/api/brain/search?q=kifokus").get_json()["results"]
+        snippets = [item["snippet"] for item in results]
+
+        self.assertEqual(len(results), 1)
+        self.assertIn("Stored note", snippets[0])
+        # The hashtag is not in the text at all - only the footer carries it.
+        self.assertNotIn("kifokus", snippets[0])
+
+    def test_ki_prefix_narrows_the_search_to_machine_assigned_hashtags(self):
+        self._tag_block_by_model("kifokus")
+
+        machine = self.client.get("/api/brain/search?q=ki:kifokus").get_json()["results"]
+        any_machine = self.client.get("/api/brain/search?q=ki:").get_json()["results"]
+        without_machine = self.client.get("/api/brain/search?q=-ki:").get_json()["results"]
+        wrong_tag = self.client.get("/api/brain/search?q=ki:work").get_json()["results"]
+
+        self.assertEqual([item["path"] for item in machine], ["2026/08/03/Journal_2026-08-03.md"])
+        self.assertTrue(all("Stored note" in item["snippet"] for item in machine))
+        self.assertEqual([item["snippet"] for item in any_machine], [item["snippet"] for item in machine])
+        self.assertTrue(all("Stored note" not in item["snippet"] for item in without_machine))
+        # ``work`` is the user's own hashtag on that block, not the model's.
+        self.assertEqual(wrong_tag, [])
+
+    def test_the_tag_list_says_how_many_hits_a_model_assigned(self):
+        self._tag_block_by_model("kifokus")
+
+        tags = {item["name"]: item for item in self.client.get("/api/brain/tags").get_json()["tags"]}
+
+        # Machine origin is a property of the hit, not of the hashtag: #work is
+        # the user's own on both blocks, #kifokus exists only through the model.
+        self.assertEqual((tags["kifokus"]["count"], tags["kifokus"]["ai_count"]), (1, 1))
+        self.assertEqual(tags["work"]["ai_count"], 0)
+
+    def test_a_ki_query_narrows_the_block_facets_to_what_the_model_tagged(self):
+        self._tag_block_by_model("kifokus")
+
+        unfiltered = self.client.get("/api/brain/tags?facet=block").get_json()["tags"]
+        machine = self.client.get("/api/brain/tags?facet=block&q=ki:").get_json()["tags"]
+
+        self.assertEqual({item["name"] for item in machine if item["count"]}, {"focus", "kifokus", "work"})
+        # Only the model-tagged block counts now, so #work drops from two to one.
+        self.assertEqual({item["name"]: item["count"] for item in unfiltered}["work"], 2)
+        self.assertEqual({item["name"]: item["count"] for item in machine}["work"], 1)
+
+    def test_block_facets_only_count_the_tags_of_the_matching_blocks(self):
+        document_wide = self.client.get("/api/brain/tags?tags=focus").get_json()["tags"]
+        block_wide = self.client.get("/api/brain/tags?tags=focus&facet=block").get_json()["tags"]
+
+        counts = {item["name"]: item["count"] for item in document_wide}
+        drilled = {item["name"]: item["count"] for item in block_wide}
+
+        # The day's other block carries #work without #focus: it belongs to the
+        # document count, but must not widen the drill-down under #focus.
+        self.assertEqual(counts["work"], 2)
+        self.assertEqual(drilled["work"], 1)
+        self.assertEqual(drilled["focus"], 1)
 
     def test_bootstrap_builds_initial_brain_view_from_one_visible_snapshot(self):
         with mock.patch.object(brain, "_visible_documents", wraps=brain._visible_documents) as visible:
@@ -205,6 +215,22 @@ class BrainApiTests(unittest.TestCase):
         self.assertIn("work", names)
         self.assertNotIn("secret", names)
 
+    def test_proposed_tags_are_offered_and_usable_as_filters(self):
+        """A hashtag must be findable before one decides whether to approve it."""
+        self._write("user-a/notes/fresh.md", "# Fresh\n\nStill undecided #unapproved note.\n")
+
+        tags = self.client.get("/api/brain/tags").get_json()["tags"]
+        proposal = next(item for item in tags if item["name"] == "unapproved")
+        self.assertEqual(proposal["count"], 1)
+        self.assertEqual(proposal["scope"], "personal")
+
+        results = self.client.get("/api/brain/search?tags=unapproved").get_json()["results"]
+        self.assertEqual([item["path"] for item in results], ["notes/fresh.md"])
+        notes = self.client.get("/api/brain/notes?tags=unapproved").get_json()["notes"]
+        self.assertEqual([item["path"] for item in notes], ["notes/fresh.md"])
+        excluded = self.client.get("/api/brain/search?exclude_tags=unapproved").get_json()["results"]
+        self.assertNotIn("notes/fresh.md", {item["path"] for item in excluded})
+
     def test_search_filters_visible_blocks_by_tag(self):
         response = self.client.get("/api/brain/search?tags=focus")
 
@@ -213,6 +239,99 @@ class BrainApiTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["path"], "2026/08/03/Journal_2026-08-03.md")
         self.assertIn("focus", results[0]["tags"])
+        opened = self.client.get("/api/brain/document", query_string={
+            "doc_id": results[0]["doc_id"], "fingerprint": results[0]["fingerprint"],
+        })
+        self.assertEqual(opened.status_code, 200)
+        block = opened.get_json()
+        self.assertEqual(block["block_content"], results[0]["snippet"])
+        self.assertLessEqual(block["block_start_line"], block["block_end_line"])
+
+    def test_search_excludes_blocks_matching_excluded_tag(self):
+        baseline = self.client.get("/api/brain/search").get_json()["results"]
+        response = self.client.get("/api/brain/search?exclude_tags=focus")
+
+        self.assertEqual(response.status_code, 200)
+        results = response.get_json()["results"]
+        self.assertEqual(len(results), len(baseline) - 1)
+        self.assertFalse(any("focus" in item["tags"] for item in results))
+        self.assertTrue(any(item["path"] == "2026/08/03/Journal_2026-08-03.md" for item in results))
+
+        combined = self.client.get("/api/brain/search?tags=work&exclude_tags=focus").get_json()["results"]
+        self.assertEqual(len(combined), 1)
+        self.assertIn("work", combined[0]["tags"])
+        self.assertNotIn("focus", combined[0]["tags"])
+
+    def test_tags_endpoint_narrows_facet_by_excluded_tag(self):
+        tags = self.client.get("/api/brain/tags").get_json()["tags"]
+        self.assertIn("focus", {item["name"] for item in tags})
+
+        narrowed = self.client.get("/api/brain/tags?exclude_tags=focus").get_json()["tags"]
+        self.assertNotIn("focus", {item["name"] for item in narrowed})
+
+    def test_theme_group_widens_the_result_instead_of_narrowing_it(self):
+        """``any_tags`` is what makes a second, unrelated topic reachable at all."""
+        self._write("user-a/notes/fresh.md", "# Fresh\n\nStill undecided #unapproved note.\n")
+
+        drilled = self.client.get("/api/brain/search?tags=focus&tags=unapproved").get_json()["results"]
+        self.assertEqual(drilled, [])
+
+        widened = self.client.get("/api/brain/search?any_tags=focus&any_tags=unapproved").get_json()
+        paths = {item["path"] for item in widened["results"]}
+        self.assertEqual(paths, {"2026/08/03/Journal_2026-08-03.md", "notes/fresh.md"})
+
+    def test_selected_tags_refine_the_theme_group(self):
+        """Themes are an OR gate, the drill-down tags narrow what got through."""
+        self._write("user-a/notes/fresh.md", "# Fresh\n\nStill undecided #unapproved note.\n")
+
+        response = self.client.get(
+            "/api/brain/search?any_tags=focus&any_tags=unapproved&tags=work"
+        ).get_json()["results"]
+
+        self.assertEqual([item["path"] for item in response], ["2026/08/03/Journal_2026-08-03.md"])
+        self.assertIn("focus", response[0]["tags"])
+
+    def test_excluded_tag_beats_the_theme_group(self):
+        combined = self.client.get("/api/brain/search?any_tags=focus&exclude_tags=focus")
+
+        self.assertEqual(combined.status_code, 200)
+        self.assertEqual(combined.get_json()["results"], [])
+
+    def test_facets_cover_every_theme_of_the_group(self):
+        """The pickers must keep offering the siblings of all themes, not only one."""
+        self._write("user-a/notes/fresh.md", "# Fresh\n\nStill undecided #unapproved note.\n")
+
+        narrowed = self.client.get("/api/brain/tags?facet=block&tags=focus").get_json()["tags"]
+        self.assertNotIn("unapproved", {item["name"] for item in narrowed})
+
+        widened = self.client.get(
+            "/api/brain/tags?facet=block&any_tags=focus&any_tags=unapproved"
+        ).get_json()["tags"]
+        names = {item["name"] for item in widened}
+        self.assertIn("focus", names)
+        self.assertIn("unapproved", names)
+        self.assertIn("work", names)
+
+    def test_file_lists_honour_the_theme_group(self):
+        self._write("user-a/notes/tagged.md", "# Tagged\n\nRelevant #focus note.\n")
+        self._write("user-a/notes/fresh.md", "# Fresh\n\nStill undecided #unapproved note.\n")
+
+        notes = self.client.get("/api/brain/notes?any_tags=focus&any_tags=unapproved").get_json()["notes"]
+
+        self.assertEqual(
+            {item["path"] for item in notes},
+            {"notes/tagged.md", "notes/fresh.md"},
+        )
+
+    def test_file_lists_exclude_tagged_files(self):
+        self._write("user-a/notes/tagged.md", "# Tagged\n\nRelevant #focus note.\n")
+        self._write("user-a/notes/other.md", "# Other\n\nUnrelated #work note.\n")
+
+        notes = self.client.get("/api/brain/notes?exclude_tags=focus").get_json()["notes"]
+        paths = {item["path"] for item in notes}
+        self.assertIn("notes/other.md", paths)
+        self.assertIn("notes/keep.md", paths)
+        self.assertNotIn("notes/tagged.md", paths)
 
     def test_tag_count_deduplicates_tags_in_the_same_visible_block(self):
         documents = [{"blocks": [{"fingerprint": "block-1", "tags": ["focus", "focus"]}]}]
@@ -222,7 +341,7 @@ class BrainApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.get_json()["tags"],
-            [{"name": "focus", "count": 1, "scope": "personal"}],
+            [{"name": "focus", "count": 1, "ai_count": 0, "scope": "personal"}],
         )
 
     def test_tag_filter_only_offers_tags_from_matching_documents(self):
@@ -273,6 +392,37 @@ class BrainApiTests(unittest.TestCase):
         self.assertEqual(payload["temperature"], 0.1)
         self.assertEqual(payload["response_format"], {"type": "json_schema"})
 
+    def test_ai_api_sends_hash_checked_image_as_openai_content_block(self):
+        image = self.data_dir / "user-a/ai_jobs/attachments/11111111-1111-1111-1111-111111111111/image-1.png"
+        image.parent.mkdir(parents=True)
+        image.write_bytes(b"\x89PNG\r\n\x1a\nprivate-image")
+        attachment = {
+            "type": "image", "mime_type": "image/png",
+            "path": image.relative_to(self.data_dir).as_posix(),
+            "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+            "byte_size": image.stat().st_size,
+        }
+        response = mock.MagicMock()
+        response.read.return_value = json.dumps({
+            "choices": [{"message": {"content": "described"}}]
+        }).encode("utf-8")
+        response.__enter__.return_value = response
+        opener = mock.MagicMock()
+        opener.open.return_value = response
+
+        with mock.patch("urllib.request.build_opener", return_value=opener), \
+             mock.patch.object(main._main_ai, "DATA_DIR", self.data_dir):
+            result = main._call_ai_api(
+                {"id": "test", "api_url": "http://localhost/v1/chat/completions", "model": "test"},
+                {}, "describe", image_attachments=[attachment],
+            )
+
+        self.assertEqual(result, "described")
+        payload = json.loads(opener.open.call_args.args[0].data)
+        content = payload["messages"][-1]["content"]
+        self.assertEqual(content[0], {"type": "text", "text": "describe"})
+        self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+
     def test_ai_api_rejects_reasoning_only_for_required_content(self):
         response = mock.MagicMock()
         response.read.return_value = json.dumps({
@@ -308,7 +458,39 @@ class BrainApiTests(unittest.TestCase):
 
         self.assertEqual(result, "Useful answer")
 
-    def test_historical_tagging_accepts_only_local_provider(self):
+    def test_a_chat_session_in_the_day_folder_is_indexed_and_read_only(self):
+        """Der Chatverlauf liegt neben dem Journal — und muss auffindbar sein.
+
+        Ohne die Art ``chat`` in ``_personal_kind`` waere die Datei fuer den Index
+        unsichtbar: sie liegt im Tagesordner, heisst aber nicht ``Journal_*.md``.
+        """
+        self._write(
+            "user-a/2026/08/31/Chat_2026-08-31_14-05-12.md",
+            "---\nid: c1\ntype: brain-chat-session\nmodel: local\n---\n\n"
+            "# Chat mit den Notizen\n\n___\n\n"
+            "## Frage | Datum & Uhrzeit: 2026-08-31 14:05:12\n\nWorum ging es bei Segelboot?\n",
+        )
+        brain.rebuild_user_index("user-a")
+
+        results = self.client.get("/api/brain/search?q=Segelboot").get_json()["results"]
+        paths = {item["path"] for item in results}
+        self.assertIn("2026/08/31/Chat_2026-08-31_14-05-12.md", paths)
+        found = next(item for item in results if item["path"].startswith("2026/08/31/Chat"))
+        self.assertEqual(found["kind"], "chat")
+        self.assertTrue(found["read_only"])
+
+    def test_a_chat_session_is_not_mistaken_for_a_journal(self):
+        """Die Verschlagwortung darf den Chat nie anfassen — er ist kein Journal."""
+        self._write(
+            "user-a/2026/08/31/Chat_2026-08-31_14-05-12.md",
+            "---\ntype: brain-chat-session\n---\n\n# Chat\n\nEin Verlauf.\n",
+        )
+        journals = [path.name for path in brain.tagging_module.journal_paths("user-a")]
+        self.assertNotIn("Chat_2026-08-31_14-05-12.md", journals)
+        self.assertEqual(brain.ignored_markdown_files("user-a")["count"], 0)
+
+    def test_historical_tagging_start_accepts_only_local_provider(self):
+        """Ein entfernter Anbieter kommt nicht in Frage — die Journale bleiben lokal."""
         config = {
             "ai_providers": [
                 {"id": "openrouter", "model": "remote"},
@@ -316,26 +498,59 @@ class BrainApiTests(unittest.TestCase):
             ],
             "historical_tagging_ai": {"system_prompt": "test"},
         }
-        report = {"processed": 0, "skipped": 0, "errors": [], "proposals": []}
-
         with mock.patch.object(main, "load_config", return_value=config), mock.patch.object(
-            brain.historical_tagging, "run_historical_tagging", return_value=report
-        ) as run_tagging:
+            background_runs, "start", return_value={"id": "run-1", "status": "queued"}
+        ) as start_run:
             remote = self.client.post(
-                "/api/brain/tagging/run",
+                "/api/brain/tagging/start",
                 json={"start_date": "2026-08-01", "end_date": "2026-08-04", "provider_id": "openrouter"},
                 headers=self.headers,
             )
             local = self.client.post(
-                "/api/brain/tagging/run",
+                "/api/brain/tagging/start",
                 json={"start_date": "2026-08-01", "end_date": "2026-08-04", "provider_id": "lm_test"},
                 headers=self.headers,
             )
 
         self.assertEqual(remote.status_code, 400)
-        self.assertEqual(local.status_code, 200)
-        self.assertEqual(run_tagging.call_count, 1)
-        self.assertEqual(run_tagging.call_args.args[3]["id"], "lm_test")
+        self.assertEqual(local.status_code, 202)
+        self.assertEqual(start_run.call_count, 1)
+        self.assertEqual(start_run.call_args.args[1], brain.historical_tagging.RUN_KIND)
+        self.assertEqual(start_run.call_args.args[2]["provider_id"], "lm_test")
+
+    def test_historical_tagging_start_refuses_a_second_run(self):
+        """Zwei Laeufe wuerden dieselben Journale gleichzeitig umschreiben."""
+        config = {"ai_providers": [{"id": "lm_test", "model": "local"}], "historical_tagging_ai": {}}
+        running = {"id": "run-1", "kind": brain.historical_tagging.RUN_KIND, "status": "running"}
+        with mock.patch.object(main, "load_config", return_value=config), mock.patch.object(
+            background_runs, "start", side_effect=background_runs.RunConflict("läuft schon")
+        ), mock.patch.object(background_runs, "active", return_value=running):
+            response = self.client.post(
+                "/api/brain/tagging/start",
+                json={"start_date": "2026-08-01", "end_date": "2026-08-04", "provider_id": "lm_test"},
+                headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["run"]["id"], "run-1")
+
+    def test_historical_tagging_start_validates_the_date_range(self):
+        config = {"ai_providers": [{"id": "lm_test", "model": "local"}], "historical_tagging_ai": {}}
+        with mock.patch.object(main, "load_config", return_value=config):
+            reversed_range = self.client.post(
+                "/api/brain/tagging/start",
+                json={"start_date": "2026-08-04", "end_date": "2026-08-01", "provider_id": "lm_test"},
+                headers=self.headers,
+            )
+            stale_without_date = self.client.post(
+                "/api/brain/tagging/start",
+                json={"start_date": "2026-08-01", "end_date": "2026-08-04",
+                      "provider_id": "lm_test", "mode": "stale"},
+                headers=self.headers,
+            )
+
+        self.assertEqual(reversed_range.status_code, 400)
+        self.assertEqual(stale_without_date.status_code, 400)
 
     def test_personal_file_lists_are_separated_recursive_and_filterable(self):
         self._write("user-a/notes/garden/plants.md", "# Plants\n\nMonstera and fern.\n")
@@ -612,7 +827,8 @@ class BrainApiTests(unittest.TestCase):
             "- [ ] id: family-task | title: Shared task | user: user-a | target-date: 2026-08-03\n",
         )
         tasks = self.client.get("/api/brain/tasks?status=open").get_json()["tasks"]
-        task = next(item for item in tasks if "title: Shared task" in item["text"])
+        # Die Karte zeigt die Formulierung, nicht die Maschinenzeile der Datei.
+        task = next(item for item in tasks if item["text"] == "Shared task (fällig 2026-08-03)")
         metadata = self.client.post("/api/brain/metadata", headers=self.headers, json={
             "doc_id": task["doc_id"],
             "reference_type": "task",
@@ -683,7 +899,7 @@ class BrainApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         shared = next(tag for tag in response.get_json()["tags"] if tag["name"] == "shared")
-        self.assertEqual(shared, {"name": "shared", "count": 0, "scope": "family"})
+        self.assertEqual(shared, {"name": "shared", "count": 0, "ai_count": 0, "scope": "family"})
         self.assertEqual(self.client.get("/api/brain/search?tags=shared").get_json()["results"], [])
         catalog = self.client.get("/api/brain/tag-catalog").get_json()
         self.assertIn("shared", catalog["catalog"]["family"]["canonical"])
@@ -716,432 +932,6 @@ class BrainApiTests(unittest.TestCase):
         persisted = json.loads(family_catalog.read_text(encoding="utf-8"))
         self.assertIn("shared", persisted["canonical"])
 
-    def test_rebuild_proposes_hashtags_from_personal_notes(self):
-        self._write("user-a/notes/new-tag.md", "# Note\n\nText with #needs-approval.\n")
-
-        brain.rebuild_user_index("user-a")
-
-        catalog = brain.tagging_module.read_catalog("user-a")
-        self.assertIn("needs-approval", catalog["proposals"])
-
-    def test_indexed_family_content_is_replaced_from_current_source(self):
-        brain.rebuild_family_index()
-        visible_path = self.data_dir / "family/projects/visible.md"
-        visible_path.write_text(
-            "---\nassigned_users: [user-a]\n---\n\n# Visible Family\n\nCurrent replacement text\n",
-            encoding="utf-8",
-        )
-
-        stale = self.client.get("/api/brain/search?q=family+visible+task")
-        current = self.client.get("/api/brain/search?q=current+replacement")
-        self.assertEqual(stale.status_code, 200)
-        self.assertEqual(stale.get_json()["results"], [])
-        self.assertEqual(len(current.get_json()["results"]), 1)
-        self.assertTrue(current.get_json()["index_pending"])
-
-    def test_family_frontmatter_and_legacy_archive_fail_closed(self):
-        self._write(
-            "family/projects/crlf.md",
-            "---\r\nid: crlf\r\nassigned_users:\r\n  - user-a\r\n---\r\n\r\n# CRLF\r\n\r\nVisible CRLF text\r\n",
-        )
-        self._write(
-            "family/projects/malformed.md",
-            "---\r\nid: malformed\r\nassigned_users: [user-b\r\n---\r\n\r\n# Malformed\r\n\r\nMust stay hidden\r\n",
-        )
-        self._write("family/archive/legacy.md", "# Legacy\n\nUnverifiable archive secret\n")
-
-        visible = self.client.get("/api/brain/search?q=visible+crlf").get_json()["results"]
-        malformed = self.client.get("/api/brain/search?q=must+stay+hidden").get_json()["results"]
-        legacy = self.client.get("/api/brain/search?q=unverifiable+archive").get_json()["results"]
-        self.assertEqual(len(visible), 1)
-        self.assertEqual(malformed, [])
-        self.assertEqual(legacy, [])
-        family_projects = self.client.get("/api/family/projects").get_json()["projects"]
-        project_ids = {project["id"] for project in family_projects}
-        self.assertIn("crlf", project_ids)
-        self.assertNotIn("malformed", project_ids)
-
-    def test_family_archive_and_duplicate_task_permissions_fail_closed(self):
-        self._write(
-            "family/projects/secret-parent.md",
-            "---\nid: secret-parent\nassigned_users: [user-b]\n---\n\n# Secret\n\n"
-            "## Aufgaben\n- [x] id: secret-task | title: Secret | user: user-b | target-date: 2026-08-03\n",
-        )
-        self._write(
-            "family/archive/secret-task.md",
-            "---\nid: secret-task\nuser: user-b\nproject_id: secret-parent\n---\n\n## Secret\n",
-        )
-        self._write(
-            "family/projects/duplicate.md",
-            "---\nid: duplicate\nassigned_users: [user-a]\n---\n\n# Duplicate\n\n## Aufgaben\n"
-            "- [ ] id: same-id | title: Duplicate one | user: user-a | target-date: 2026-08-03\n"
-            "- [ ] id: same-id | title: Duplicate two | user: user-a | target-date: 2026-08-04\n",
-        )
-
-        archive = self.client.get("/api/family/archive")
-        duplicate_project = self.client.get("/api/family/project/duplicate")
-        brain_tasks = self.client.get("/api/brain/tasks?q=duplicate").get_json()["tasks"]
-        archive_attempt = self.client.post("/api/family/archive/secret-task", headers=self.headers)
-        self.assertEqual(archive.status_code, 200)
-        self.assertEqual(archive.get_json()["items"], [])
-        self.assertEqual(duplicate_project.status_code, 404)
-        self.assertEqual(brain_tasks, [])
-        self.assertEqual(archive_attempt.status_code, 404)
-        self.assertTrue((self.data_dir / "family/projects/secret-parent.md").is_file())
-
-    def test_direct_document_access_is_markdown_only_and_preamble_is_indexed(self):
-        self._write("user-a/notes/private.txt", "Non-Markdown secret")
-        self._write(
-            "user-a/notes/preamble.md",
-            "Introductory searchable text\n- [ ] Preamble task\n\n# Details\n\nBody\n",
-        )
-
-        opened = self.client.get("/api/brain/document", query_string={"doc_id": "personal:notes/private.txt"})
-        results = self.client.get("/api/brain/search?q=introductory+searchable").get_json()["results"]
-        tasks = self.client.get("/api/brain/tasks?q=preamble+task").get_json()["tasks"]
-        self.assertEqual(opened.status_code, 404)
-        self.assertEqual(len(results), 1)
-        self.assertEqual(len(tasks), 1)
-
-    def test_empty_note_remains_in_timeline_and_editable(self):
-        brain.rebuild_user_index("user-a")
-        doc_id = "personal:notes/keep.md"
-        index_path = brain._index_file(brain._index_dir("personal", "user-a"), doc_id)
-        self.assertTrue(index_path.is_file())
-        opened = self.client.get("/api/brain/document", query_string={"doc_id": doc_id}).get_json()
-
-        saved = self.client.put("/api/brain/document", headers=self.headers, json={
-            "doc_id": doc_id,
-            "content": "",
-            "content_hash": opened["content_hash"],
-        })
-        self.assertEqual(saved.status_code, 200)
-        self.assertTrue(index_path.exists())
-        self.assertEqual(self.client.get("/api/brain/search?q=lasting+note").get_json()["results"], [])
-        timeline = self.client.get("/api/brain/search").get_json()["results"]
-        self.assertIn("notes/keep.md", {item["path"] for item in timeline})
-        reopened = self.client.get("/api/brain/document", query_string={"doc_id": doc_id})
-        self.assertEqual(reopened.status_code, 200)
-        self.assertEqual(reopened.get_json()["content"], "")
-
-    def test_existing_index_discovers_new_and_changed_personal_sources(self):
-        brain.rebuild_user_index("user-a")
-        self._write("user-a/notes/Pflanzen.md", "# Pflanzen\n\nMonstera und Farn.\n")
-        self._write("user-a/projects/garten/planung.md", "# Garten\n\nPflanzenprojekt.\n")
-        (self.data_dir / "user-a/notes/keep.md").write_text(
-            "# Keep\n\nExtern geaenderte Notiz.\n",
-            encoding="utf-8",
-        )
-
-        response = self.client.get("/api/brain/search")
-        self.assertEqual(response.status_code, 200)
-        payload = response.get_json()
-        paths = {item["path"] for item in payload["results"]}
-        self.assertIn("notes/Pflanzen.md", paths)
-        self.assertIn("projects/garten/planung.md", paths)
-        self.assertTrue(payload["index_pending"])
-        changed = self.client.get("/api/brain/search?q=extern+geaenderte").get_json()["results"]
-        self.assertEqual(len(changed), 1)
-
-        opened = self.client.get(
-            "/api/brain/document",
-            query_string={"doc_id": "personal:notes/Pflanzen.md"},
-        )
-        self.assertEqual(opened.status_code, 200)
-        self.assertIn("Monstera", opened.get_json()["content"])
-        saved = self.client.put("/api/brain/document", headers=self.headers, json={
-            "doc_id": "personal:notes/Pflanzen.md",
-            "content": "# Pflanzen\n\nMonstera, Farn und Ficus.\n",
-            "content_hash": opened.get_json()["content_hash"],
-        })
-        self.assertEqual(saved.status_code, 200)
-        self.assertIn("Ficus", (self.data_dir / "user-a/notes/Pflanzen.md").read_text(encoding="utf-8"))
-
-    def test_incomplete_index_falls_back_to_sources(self):
-        brain.rebuild_user_index("user-a")
-        status_path = brain._index_dir("personal", "user-a") / "status.json"
-        status = json.loads(status_path.read_text(encoding="utf-8"))
-        status["document_count"] += 1
-        status_path.write_text(json.dumps(status), encoding="utf-8")
-
-        response = self.client.get("/api/brain/search?q=lasting+note")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.get_json()["results"]), 1)
-        self.assertTrue(response.get_json()["index_pending"])
-
-    def test_archive_has_independent_index(self):
-        self.assertEqual(brain.rebuild_archive_index(), 1)
-        archive_index = brain._index_dir("archive")
-        self.assertNotEqual(archive_index, brain._index_dir("family"))
-        documents = brain._read_index_documents("archive")
-        self.assertEqual([document["doc_id"] for document in documents], ["archive:reference.md"])
-
-    def test_template_assignment_uses_created_entry_line(self):
-        original = self.journal_path.read_text(encoding="utf-8")
-        line_hint = original.count("\n") + 1
-        self.journal_path.write_text(
-            original + "___\n\n- [ ] Personal task #work\n\n___\n",
-            encoding="utf-8",
-        )
-
-        saved = brain.record_template_assignment(
-            "user-a",
-            self.journal_path,
-            "projects/alpha.md",
-            "Personal task #work",
-            line_hint,
-        )
-        self.assertTrue(saved)
-        document = brain._build_document(
-            "personal", self.data_dir / "user-a", self.journal_path, "journal"
-        )
-        matching = [
-            task for block in document["blocks"] for task in block["tasks"]
-            if task["text"] == "Personal task #work"
-        ]
-        self.assertEqual(len(matching), 2)
-        metadata = json.loads(
-            (self.data_dir / "user-a/brain_metadata.json").read_text(encoding="utf-8")
-        )["annotations"]
-        self.assertNotIn(matching[0]["fingerprint"], metadata)
-        self.assertEqual(metadata[matching[1]["fingerprint"]]["project"], "projects/alpha.md")
-
-    def test_preserved_mtime_still_detects_external_note_change(self):
-        brain.rebuild_user_index("user-a")
-        path = self.data_dir / "user-a/notes/keep.md"
-        before = path.stat()
-        path.write_text("# Keep\n\nA changed note.\n", encoding="utf-8")
-        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
-
-        response = self.client.get("/api/brain/search?q=changed+note")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.get_json()["results"]), 1)
-        self.assertTrue(response.get_json()["index_pending"])
-
-    def test_non_owner_worker_persists_rebuild_request(self):
-        self.enqueue.stop()
-        try:
-            with mock.patch.object(brain, "start_index_worker", return_value=False):
-                self.assertTrue(brain.enqueue_rebuild("user-a"))
-            self.assertEqual(brain._pop_rebuild_request(), "user-a")
-            self.assertIsNone(brain._pop_rebuild_request())
-        finally:
-            self.enqueue.start()
-
-    def test_header_only_journal_does_not_keep_index_pending(self):
-        self._write(
-            "user-a/2026/08/04/Journal_2026-08-04.md",
-            "# Journal 2026-08-04\n\n",
-        )
-        brain.rebuild_user_index("user-a")
-        brain.rebuild_family_index()
-        brain.rebuild_archive_index()
-
-        response = self.client.get("/api/brain/search")
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.get_json()["index_pending"])
-
-    def test_duplicate_timestamp_tasks_have_distinct_toggle_targets(self):
-        duplicate_path = self._write(
-            "user-a/2026/08/04/Journal_2026-08-04.md",
-            "# Journal 2026-08-04\n\n"
-            "___\n\n## Thema: Time:12:00:00\n- [ ] Duplicate collision task\n\n___\n\n"
-            "___\n\n## Thema: Time:12:00:00\n- [ ] Duplicate collision task\n\n___\n",
-        )
-        tasks = self.client.get("/api/brain/tasks?q=duplicate+collision").get_json()["tasks"]
-        self.assertEqual(len(tasks), 2)
-        self.assertEqual(len({task["fingerprint"] for task in tasks}), 2)
-
-        second = max(tasks, key=lambda task: task["start_line"])
-        toggled = self.client.post("/api/brain/task/toggle", headers=self.headers, json={
-            "doc_id": second["doc_id"],
-            "fingerprint": second["fingerprint"],
-            "completed": True,
-        })
-        self.assertEqual(toggled.status_code, 200)
-        content = duplicate_path.read_text(encoding="utf-8")
-        self.assertEqual(content.count("- [ ] Duplicate collision task"), 1)
-        self.assertEqual(content.count("- [x] Duplicate collision task"), 1)
-
-    def test_rebuild_migrates_legacy_metadata_fingerprint(self):
-        document = brain._build_document(
-            "personal",
-            self.data_dir / "user-a",
-            self.data_dir / "user-a/notes/keep.md",
-            "note",
-        )
-        block = document["blocks"][0]
-        self.assertNotEqual(block["fingerprint"], block["legacy_fingerprint"])
-        metadata_path = self.data_dir / "user-a/brain_metadata.json"
-        metadata_path.write_text(json.dumps({
-            "version": 1,
-            "annotations": {
-                block["legacy_fingerprint"]: {
-                    "kind": "block",
-                    "doc_id": document["doc_id"],
-                    "path": document["path"],
-                    "stable_anchor": block["stable_anchor"],
-                    "tags": ["legacy"],
-                    "priority": "high",
-                    "project": "projects/alpha.md",
-                    "orphaned": False,
-                }
-            },
-        }), encoding="utf-8")
-
-        brain.rebuild_user_index("user-a")
-        migrated = json.loads(metadata_path.read_text(encoding="utf-8"))["annotations"]
-        self.assertNotIn(block["legacy_fingerprint"], migrated)
-        self.assertEqual(migrated[block["fingerprint"]]["tags"], ["legacy"])
-        result = self.client.get("/api/brain/search?q=lasting+note").get_json()["results"][0]
-        self.assertIn("legacy", result["manual_tags"])
-
-    def test_ambiguous_legacy_task_metadata_stays_unassigned(self):
-        duplicate_path = self._write(
-            "user-a/2026/08/04/Journal_2026-08-04.md",
-            "# Journal 2026-08-04\n\n"
-            "___\n\n## Thema: Time:12:00:00\n- [ ] Ambiguous legacy task\n\n___\n\n"
-            "___\n\n## Thema: Time:12:00:00\n- [ ] Ambiguous legacy task\n\n___\n",
-        )
-        document = brain._build_document(
-            "personal", self.data_dir / "user-a", duplicate_path, "journal"
-        )
-        matching = [
-            task for block in document["blocks"] for task in block["tasks"]
-            if task["text"] == "Ambiguous legacy task"
-        ]
-        self.assertEqual(matching[0]["legacy_fingerprint"], matching[1]["legacy_fingerprint"])
-        self._write("user-a/brain_metadata.json", json.dumps({
-            "version": 1,
-            "annotations": {
-                matching[0]["legacy_fingerprint"]: {
-                    "kind": "task",
-                    "doc_id": document["doc_id"],
-                    "path": document["path"],
-                    "stable_anchor": "timestamp:12:00:00",
-                    "task_text": brain._task_identity("Ambiguous legacy task"),
-                    "task_occurrence": 1,
-                    "tags": ["must-not-move"],
-                    "priority": "high",
-                    "project": "",
-                    "orphaned": True,
-                }
-            },
-        }))
-
-        tasks = self.client.get("/api/brain/tasks?q=ambiguous+legacy").get_json()["tasks"]
-        self.assertEqual(len(tasks), 2)
-        self.assertTrue(all("must-not-move" not in task["manual_tags"] for task in tasks))
-
-    def test_metadata_updates_are_partial_and_corrupt_file_is_preserved(self):
-        result = next(
-            item for item in self.client.get("/api/brain/search?q=stored+note").get_json()["results"]
-            if item["path"].endswith("Journal_2026-08-03.md")
-        )
-        priority = self.client.post("/api/brain/metadata", headers=self.headers, json={
-            "doc_id": result["doc_id"],
-            "reference_type": "block",
-            "fingerprint": result["fingerprint"],
-            "priority": "high",
-        })
-        self.assertEqual(priority.status_code, 200)
-        refreshed = next(
-            item for item in self.client.get("/api/brain/search?q=stored+note").get_json()["results"]
-            if item["doc_id"] == result["doc_id"]
-        )
-        self.assertEqual(refreshed["priority"], "high")
-        self.assertEqual(refreshed["manual_tags"], [])
-        self.assertIn("focus", refreshed["tags"])
-
-        tags = self.client.post("/api/brain/metadata", headers=self.headers, json={
-            "doc_id": result["doc_id"],
-            "reference_type": "block",
-            "fingerprint": result["fingerprint"],
-            "tags": ["Manual"],
-        })
-        self.assertEqual(tags.status_code, 200)
-        self.assertEqual(tags.get_json()["metadata"]["priority"], "high")
-
-        metadata_path = self.data_dir / "user-a/brain_metadata.json"
-        metadata_path.write_text("{broken", encoding="utf-8")
-        corrupt = self.client.post("/api/brain/metadata", headers=self.headers, json={
-            "doc_id": result["doc_id"],
-            "reference_type": "block",
-            "fingerprint": result["fingerprint"],
-            "priority": "low",
-        })
-        self.assertEqual(corrupt.status_code, 409)
-        self.assertEqual(metadata_path.read_text(encoding="utf-8"), "{broken")
-
-        invalid_schema = '{"annotations":{"bad":"value"}}'
-        metadata_path.write_text(invalid_schema, encoding="utf-8")
-        readable = self.client.get("/api/brain/search?q=stored+note")
-        schema_update = self.client.post("/api/brain/metadata", headers=self.headers, json={
-            "doc_id": result["doc_id"],
-            "reference_type": "block",
-            "fingerprint": result["fingerprint"],
-            "priority": "low",
-        })
-        self.assertEqual(readable.status_code, 200)
-        self.assertEqual(schema_update.status_code, 409)
-        self.assertEqual(metadata_path.read_text(encoding="utf-8"), invalid_schema)
-
-    def test_rebuild_keeps_unmatched_metadata_as_orphaned(self):
-        tasks = self.client.get("/api/brain/tasks?status=open").get_json()["tasks"]
-        task = next(item for item in tasks if item["text"] == "Personal task #work")
-        self.client.post("/api/brain/metadata", headers=self.headers, json={
-            "doc_id": task["doc_id"],
-            "reference_type": "task",
-            "fingerprint": task["fingerprint"],
-            "tags": ["keep"],
-            "priority": "normal",
-            "project": "",
-        })
-        self.journal_path.write_text("# Journal 2026-08-03\n", encoding="utf-8")
-        brain.rebuild_user_index("user-a")
-        metadata = json.loads((self.data_dir / "user-a/brain_metadata.json").read_text(encoding="utf-8"))
-        annotation = metadata["annotations"][task["fingerprint"]]
-        self.assertTrue(annotation["orphaned"])
-        self.assertTrue((self.data_dir / "user-a/indexes/brain_index/status.json").is_file())
-
-    def test_journal_transaction_serializes_with_brain_task_toggle(self):
-        document = brain._build_document("personal", self.data_dir / "user-a", self.journal_path, "journal")
-        task = next(task for block in document["blocks"] for task in block["tasks"] if task["text"] == "Personal task #work")
-        entered = threading.Event()
-        release = threading.Event()
-        toggle_started = threading.Event()
-        toggle_result = {}
-
-        def append_under_lock():
-            def append(current):
-                entered.set()
-                release.wait(timeout=2)
-                return current + "\nConcurrent journal entry\n"
-
-            main._update_journal_file(self.journal_path, append)
-
-        def toggle_task():
-            toggle_started.set()
-            toggle_result.update(brain._toggle_markdown_task(self.journal_path, task, True))
-
-        writer = threading.Thread(target=append_under_lock)
-        writer.start()
-        self.assertTrue(entered.wait(timeout=1))
-
-        toggler = threading.Thread(target=toggle_task)
-        toggler.start()
-        self.assertTrue(toggle_started.wait(timeout=1))
-        self.assertTrue(toggler.is_alive())
-        release.set()
-        writer.join(timeout=2)
-        toggler.join(timeout=2)
-
-        self.assertFalse(writer.is_alive())
-        self.assertFalse(toggler.is_alive())
-        self.assertTrue(toggle_result["ok"])
-        content = self.journal_path.read_text(encoding="utf-8")
-        self.assertIn("Concurrent journal entry", content)
-        self.assertIn("- [x] Personal task #work", content)
 
 
 if __name__ == "__main__":

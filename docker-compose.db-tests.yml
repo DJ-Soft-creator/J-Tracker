@@ -1,0 +1,34 @@
+# Disposable DB integration-test stack, intentionally separate from docker-compose.dev.yml.
+# It is still used by later DB phase tests, exposes no host port, and stores
+# PostgreSQL data only in a container tmpfs.
+name: journl-db-tests
+
+services:
+  db-tests-postgres:
+    image: postgres:16.8-alpine
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_USER: spike
+      POSTGRES_DB: spike
+      PGDATA: /var/lib/postgresql/data/pgdata
+    tmpfs:
+      - /var/lib/postgresql/data:rw,noexec,nosuid,size=128m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spike -d spike"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 2s
+
+  db-tests-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.db-tests
+    environment:
+      DATABASE_URL: postgresql+psycopg://spike@db-tests-postgres:5432/spike
+    volumes:
+      - ./:/workspace:ro
+    depends_on:
+      db-tests-postgres:
+        condition: service_healthy
+    restart: "no"

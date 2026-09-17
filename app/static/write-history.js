@@ -94,7 +94,6 @@
     return field;
   };
   window.writeEditorUndo = undo;
-  window.writeEditorRedo = redo;
   window.writeEditorReset = function (value = '') {
     undoStack.length = 0;
     redoStack.length = 0;

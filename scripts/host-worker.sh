@@ -82,9 +82,7 @@ fi
 [[ "$action" =~ ^(install|reinstall|start|stop|restart|status|logs)$ ]] || { usage >&2; exit 2; }
 [[ "$environment" =~ ^(dev|prod|all)$ ]] || { usage >&2; exit 2; }
 [[ "$lines" =~ ^[1-9][0-9]*$ ]] || { echo '--lines muss positiv sein.' >&2; exit 2; }
-if [[ "$action" =~ ^(install|reinstall)$ ]]; then
-  :
-elif [[ "$no_start" == true ]]; then
+if [[ ! "$action" =~ ^(install|reinstall)$ && "$no_start" == true ]]; then
   echo '--no-start gilt nur für install/reinstall.' >&2; exit 2
 fi
 

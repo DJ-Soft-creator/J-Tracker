@@ -1,4 +1,8 @@
-"""Family Tracker Backend – Phase 1.
+"""Family domain facade: paths, parsing, serialization and write primitives.
+
+AI maintenance contract: keep HTTP orchestration in family_routes.py or
+family_content_routes.py. Keep shared Markdown invariants and persistent write
+helpers here so both route groups and external scripts use one implementation.
 
 Stellt das Blueprint `family_bp` mit allen /api/family/* Endpunkten sowie
 Parser/Serializer fuer Projekt-Dateien und zugehoerige Helper bereit.
@@ -35,6 +39,16 @@ from scheduling import (
     write_text_file,
 )
 
+import family_views
+from family_markdown import (
+    _valid_id,
+    _KV_RE,
+    _is_shopping_project,
+    _shopping_heading_title,
+    parse_project_content,
+    serialize_project,
+)
+
 logger = logging.getLogger(__name__)
 
 # ─── Pfade ────────────────────────────────────────────────────────────
@@ -43,10 +57,13 @@ FAMILY_DIR = DATA_DIR / "family"
 PROJECTS_DIR = FAMILY_DIR / "projects"
 PLANNER_DIR = FAMILY_DIR / "planner"
 ARCHIVE_DIR = FAMILY_DIR / "archive"
+# Abgeschlossene Projekte liegen in einem Unterordner, damit sie nicht mit den
+# archivierten Einzelaufgaben (`archive/<task-id>.md`) kollidieren. Brain
+# indiziert FAMILY_DIR rekursiv, sie bleiben also durchsuchbar.
+ARCHIVED_PROJECTS_DIR = ARCHIVE_DIR / "projects"
 PLANNER_FILE = PLANNER_DIR / "recurring.md"
 FAMILY_TASKS_FILE = FAMILY_DIR / "Familien-Aufgaben.md"
 RECURRING_PROJECT_ID = "wiederkehrende-aufgaben"
-_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 # ─── Blueprint ─────────────────────────────────────────────────────────
 family_bp = Blueprint("family", __name__, url_prefix="/api/family")
@@ -87,7 +104,7 @@ def _user_display(uid):
 
 def _ensure_dirs():
     """Legt alle Family-Ordner lazily an."""
-    for d in (FAMILY_DIR, PROJECTS_DIR, PLANNER_DIR, ARCHIVE_DIR):
+    for d in (FAMILY_DIR, PROJECTS_DIR, PLANNER_DIR, ARCHIVE_DIR, ARCHIVED_PROJECTS_DIR):
         d.mkdir(parents=True, exist_ok=True)
     ensure_text_file(PLANNER_FILE)
     ensure_text_file(FAMILY_TASKS_FILE)
@@ -112,10 +129,6 @@ def _user_can_see(assigned_users, uid):
     return uid in assigned_users
 
 
-def _valid_id(value):
-    return isinstance(value, str) and _SAFE_ID_RE.fullmatch(value) is not None
-
-
 def _project_integrity_valid(project):
     if not (
         project
@@ -132,276 +145,13 @@ def _project_visible(project, uid):
     return _project_integrity_valid(project) and _user_can_see(project.get("assigned_users", []), uid)
 
 
-# ─── Projekt-Parser/Serializer ─────────────────────────────────────────
-_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---(?:\n|$)", re.DOTALL)
-_KV_RE = re.compile(r"^(\w+):\s*(.*)$")
-
-_TASK_PREFIX_RE = re.compile(r"^-\s*\[(?P<check>[ xX])\]\s*(?P<body>.+)$")
-
-_COMMENT_RE = re.compile(
-    r'^-\s*id:\s*(?P<id>[^|]+?)\s*\|\s*'
-    r'user:\s*(?P<user>[^|]*?)\s*\|\s*'
-    r'text:\s*(?P<text>.*?)\s*\|\s*'
-    r'created_at:\s*(?P<created_at>[^|]*?)\s*$'
-)
-
-
-def _is_shopping_project(project):
-    """Whether a project uses the shopping-list representation."""
-    return (
-        project.get("template_id") == "einkaufsliste"
-        or (project.get("target_file") or "").endswith("einkaufsliste.md")
-    )
-
-
-def _shopping_heading_title(title):
-    """Return a shopping category for a Markdown heading, else ``None``.
-
-    Older imports could store category lines (for example ``## Kühlung``) as
-    ordinary tasks.  They are structural information, never purchasable
-    items, and consequently must not receive a completion checkbox.
-    """
-    value = str(title or "").strip()
-    heading = re.fullmatch(r"#{1,6}\s+(.+?)\s*", value)
-    if heading:
-        return heading.group(1).strip()
-    bold_heading = re.fullmatch(r"\*\*(.+?)\*\*", value)
-    if bold_heading:
-        return bold_heading.group(1).strip()
-    return None
-
-
-def _normalize_shopping_heading_tasks(project):
-    """Convert legacy heading-tasks into category metadata on real items."""
-    if not _is_shopping_project(project):
-        return
-
-    category = ""
-    tasks = []
-    for task in project.get("tasks", []):
-        heading = _shopping_heading_title(task.get("title"))
-        if heading:
-            category = heading
-            continue
-        if category and not task.get("gruppe"):
-            task["gruppe"] = category
-        tasks.append(task)
-    project["tasks"] = tasks
-
-
-def _parse_task_line(line):
-    """Parse one extensible task line without losing optional metadata.
-
-    Project files predate shopping categories, so task lines may contain old
-    fields only or newer fields such as ``sort-index`` and ``gruppe``.  A
-    key/value parser accepts both formats and fails closed for malformed or
-    duplicate metadata.
-    """
-    match = _TASK_PREFIX_RE.match(line)
-    if not match:
-        return None
-    values = {}
-    for part in match.group("body").split("|"):
-        if ":" not in part:
-            return None
-        key, value = part.split(":", 1)
-        key = key.strip().casefold()
-        if not key or key in values:
-            return None
-        values[key] = value.strip()
-    required = {"id", "title", "user", "target-date"}
-    if not required.issubset(values):
-        return None
-    task_id = values["id"]
-    if not _valid_id(task_id):
-        return None
-    sort_index = values.get("sort-index", "")
-    if sort_index and not sort_index.isdigit():
-        return None
-    return {
-        "id": task_id,
-        "title": values["title"],
-        "user": values["user"],
-        "target_date": values["target-date"],
-        "completed": match.group("check").lower() == "x",
-        "created_at": values.get("created_at", ""),
-        "created_by": values.get("created_by", ""),
-        "completed_at": values.get("completed_at", "") or None,
-        "completed_by": values.get("completed_by", "") or None,
-        "sort_index": int(sort_index) if sort_index else None,
-        "gruppe": values.get("gruppe", ""),
-        "source": "manual",
-    }
-
+# ─── Projekt-Parser/Serializer (siehe family_markdown.py) ─────────────
 def parse_project_file(path: Path):
     """Liest eine Projekt-Datei und liefert ein dict (oder None)."""
     content = _read_file(path)
     if content is None:
         return None
     return parse_project_content(content, path.name)
-
-
-def parse_project_content(content, file_name=None):
-    """Parst Projekt-Markdown aus einer bereits gesperrten Transaktion."""
-    project = {
-        "id": None,
-        "title": None,
-        "template_id": None,
-        "target_file": None,
-        "assigned_users": [],
-        "created_at": None,
-        "created_by": None,
-        "tasks": [],
-        "comments": [],
-        "file": file_name,
-        "_frontmatter_valid": True,
-        "_task_ids_valid": True,
-    }
-
-    # Frontmatter
-    normalized = (content or "").lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
-    fm_match = _FRONTMATTER_RE.match(normalized)
-    body = normalized
-    if fm_match:
-        lines = fm_match.group(1).split("\n")
-        index = 0
-        while index < len(lines):
-            line = lines[index]
-            if not line.strip() or line.lstrip().startswith("#"):
-                index += 1
-                continue
-            m = _KV_RE.match(line)
-            if not m:
-                project["_frontmatter_valid"] = False
-                index += 1
-                continue
-            key, val = m.group(1), m.group(2).strip()
-            if key == "assigned_users":
-                v = val.strip()
-                if v.startswith("["):
-                    if not v.endswith("]"):
-                        project["_frontmatter_valid"] = False
-                        index += 1
-                        continue
-                    inner = v[1:-1].strip()
-                    if inner:
-                        parts = [p.strip().strip('"').strip("'") for p in inner.split(",")]
-                        project["assigned_users"] = [p for p in parts if p]
-                    else:
-                        project["assigned_users"] = []
-                elif v:
-                    project["assigned_users"] = [v] if v else []
-                else:
-                    assigned = []
-                    while index + 1 < len(lines):
-                        list_match = re.match(r"^\s+-\s+(.+?)\s*$", lines[index + 1])
-                        if not list_match:
-                            break
-                        assigned.append(list_match.group(1).strip().strip("'\""))
-                        index += 1
-                    project["assigned_users"] = [item for item in assigned if item]
-            else:
-                project[key] = val
-            index += 1
-        body = normalized[fm_match.end():]
-    elif normalized.startswith("---"):
-        project["_frontmatter_valid"] = False
-        body = ""
-
-    # Body parsen
-    section = None
-    seen_task_ids = set()
-    for raw_line in body.split("\n"):
-        line = raw_line.rstrip()
-        stripped = line.strip()
-        if stripped.startswith("## "):
-            header = stripped[3:].strip().lower()
-            if "aufgabe" in header:
-                section = "tasks"
-            elif "kommentar" in header:
-                section = "comments"
-            else:
-                section = None
-            continue
-
-        if not stripped:
-            continue
-
-        if section == "tasks":
-            task = _parse_task_line(stripped)
-            if task:
-                task_id = task["id"]
-                if task_id in seen_task_ids:
-                    project["_task_ids_valid"] = False
-                    continue
-                seen_task_ids.add(task_id)
-                project["tasks"].append(task)
-            elif stripped.startswith("- ["):
-                project["_task_ids_valid"] = False
-            continue
-
-        if section == "comments":
-            m = _COMMENT_RE.match(stripped)
-            if m:
-                project["comments"].append({
-                    "id": m.group("id").strip(),
-                    "user": m.group("user").strip(),
-                    "text": m.group("text").strip(),
-                    "created_at": m.group("created_at").strip(),
-                })
-            continue
-
-    _normalize_shopping_heading_tasks(project)
-    return project
-
-
-def serialize_project(project):
-    """Serialisiert ein Projekt-dict in MD-String (Frontmatter + Body)."""
-    lines = ["---"]
-    lines.append(f"id: {project.get('id') or ''}")
-    lines.append(f"title: {project.get('title') or ''}")
-    lines.append(f"template_id: {project.get('template_id') or ''}")
-    lines.append(f"target_file: {project.get('target_file') or ''}")
-    au = project.get("assigned_users") or []
-    if au:
-        lines.append("assigned_users: [" + ", ".join(au) + "]")
-    else:
-        lines.append("assigned_users: []")
-    lines.append(f"created_at: {project.get('created_at') or ''}")
-    lines.append(f"created_by: {project.get('created_by') or ''}")
-    lines.append("---")
-    lines.append("")
-    lines.append("## Aufgaben")
-    for t in project.get("tasks", []):
-        check = "x" if t.get("completed") else " "
-        parts = [
-            f"id: {t.get('id', '')}",
-            f"title: {t.get('title', '')}",
-            f"user: {t.get('user', '')}",
-            f"target-date: {t.get('target_date', '')}",
-        ]
-        if t.get("created_at"):
-            parts.append(f"created_at: {t.get('created_at')}")
-        if t.get("created_by"):
-            parts.append(f"created_by: {t.get('created_by')}")
-        if t.get("completed_at"):
-            parts.append(f"completed_at: {t.get('completed_at')}")
-        if t.get("completed_by"):
-            parts.append(f"completed_by: {t.get('completed_by')}")
-        if t.get("sort_index") is not None:
-            parts.append(f"sort-index: {t.get('sort_index')}")
-        if t.get("gruppe"):
-            parts.append(f"gruppe: {t.get('gruppe')}")
-        lines.append(f"- [{check}] " + " | ".join(parts))
-    lines.append("")
-    lines.append("## Kommentare")
-    for c in project.get("comments", []):
-        lines.append(
-            f"- id: {c.get('id', '')} | user: {c.get('user', '')} | "
-            f"text: {c.get('text', '')} | created_at: {c.get('created_at', '')}"
-        )
-    lines.append("")
-    return "\n".join(lines)
 
 
 # ─── Recurring-Tasks aus Familien-Aufgaben.md ─────────────────────────
@@ -427,7 +177,14 @@ def _load_project(project_id):
     return parse_project_file(path)
 
 
-def _save_project(project):
+def _touch(project):
+    """Record the last edit. Every mutation counts, including a task toggle."""
+    now, _ = _get_tz_aware_now()
+    project["updated_at"] = now.isoformat()
+    return project
+
+
+def _save_project(project, touch=True):
     _ensure_dirs()
     pid = project.get("id")
     if not pid:
@@ -436,12 +193,14 @@ def _save_project(project):
     if not _valid_id(pid):
         raise ValueError("Invalid Family project id")
     project["id"] = pid
+    if touch:
+        _touch(project)
     path = _project_path(pid)
     _atomic_write(path, serialize_project(project))
     return project
 
 
-def set_task_completion(project_id, task_id, user_id, completed, can_access=None):
+def set_task_completion(project_id, task_id, user_id, completed, can_access=None, allow_assignee=False):
     """Transactionally update a Family task and its completion audit fields."""
     _ensure_dirs()
     now, _ = _get_tz_aware_now()
@@ -464,16 +223,23 @@ def set_task_completion(project_id, task_id, user_id, completed, can_access=None
         if can_access and not can_access(content):
             return content, {"forbidden": True, "found": False, "task": None}
         project = parse_project_content(content, path.name)
-        if not _project_visible(project, user_id):
+        visible = _project_visible(project, user_id)
+        if not visible and not (allow_assignee and _project_integrity_valid(project)):
             return content, {"forbidden": True, "found": False, "task": None}
         for task in project.get("tasks", []):
             if task.get("id") != task_id:
                 continue
+            # Eine Aufgabe aus einem nicht freigegebenen Dokument darf nur die
+            # Person abhaken, der sie zugewiesen ist (Entscheidung 2 der
+            # Anforderung). Sonst waere die Task-ID ein Umweg um assigned_users.
+            if not visible and (task.get("user") or "") != user_id:
+                return content, {"forbidden": True, "found": False, "task": None}
             already_completed = task.get("completed") == completed
             if not already_completed:
                 task["completed"] = completed
                 task["completed_at"] = now.isoformat() if completed else None
                 task["completed_by"] = user_id if completed else None
+                _touch(project)
                 return serialize_project(project), {
                     "found": True,
                     "already_completed": False,
@@ -714,1031 +480,6 @@ def _check_csrf():
 
 
 # ─── Endpunkte ────────────────────────────────────────────────────────
-@family_bp.route("/projects", methods=["GET"])
-def family_projects():
-    """Liefert alle fuer den aktuellen User sichtbaren Projekte + Tasks."""
-    _ensure_dirs()
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    try:
-        scheduler_status = _run_due_scheduler()
-    except OSError as exc:
-        logger.error("Scheduler run failed while loading family projects: %s", exc)
-        scheduler_status = {"added": 0, "error": "Scheduler konnte nicht ausgeführt werden"}
-    _archive_overdue_completed()
-    uid = user["id"]
-
-    result = []
-    for path in _all_project_paths():
-        proj = parse_project_file(path)
-        if not proj:
-            continue
-        if not _project_visible(proj, uid):
-            continue
-        result.append(_sanitize_project(proj))
-
-    recurring = parse_recurring_tasks()
-    if recurring:
-        result.insert(0, _sanitize_project(_recurring_project(recurring)))
-    return jsonify({"projects": result, "scheduler": scheduler_status})
-
-
-@family_bp.route("/project/<project_id>", methods=["GET"])
-def family_project_detail(project_id):
-    _ensure_dirs()
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    uid = user["id"]
-    if project_id == RECURRING_PROJECT_ID:
-        try:
-            _run_due_scheduler()
-        except OSError as exc:
-            logger.error("Scheduler run failed while loading recurring tasks: %s", exc)
-        return jsonify(_sanitize_project(_recurring_project(parse_recurring_tasks())))
-    proj = _load_project(project_id)
-    if not proj:
-        return jsonify({"error": "Not found"}), 404
-    if not _project_visible(proj, uid):
-        return jsonify({"error": "Not found"}), 404
-    return jsonify(_sanitize_project(proj))
-
-
-@family_bp.route("/project", methods=["POST"])
-def family_project_create():
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    data = request.get_json(silent=True) or {}
-    title = (data.get("title") or "").strip()
-    template_id = (data.get("template_id") or "").strip()
-    target_file = data.get("target_file")
-    assigned_users = data.get("assigned_users") or []
-    if not title or not template_id:
-        return jsonify({"error": "title and template_id required"}), 400
-    now, _ = _get_tz_aware_now()
-    project = {
-        "id": str(uuid.uuid4()),
-        "title": title,
-        "template_id": template_id,
-        "target_file": target_file or "",
-        "assigned_users": assigned_users,
-        "created_at": now.isoformat(),
-        "created_by": user["id"],
-        "tasks": [],
-        "comments": [],
-    }
-    _save_project(project)
-    return jsonify(_sanitize_project(project)), 201
-
-
-@family_bp.route("/project/<project_id>", methods=["PUT"])
-def family_project_update(project_id):
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    proj = _load_project(project_id)
-    if not proj:
-        return jsonify({"error": "Not found"}), 404
-    if not _project_visible(proj, user["id"]):
-        return jsonify({"error": "Not found"}), 404
-    data = request.get_json(silent=True) or {}
-    if "title" in data:
-        proj["title"] = data["title"]
-    if "template_id" in data:
-        proj["template_id"] = data["template_id"]
-    if "target_file" in data:
-        proj["target_file"] = data["target_file"]
-    if "assigned_users" in data:
-        proj["assigned_users"] = data["assigned_users"] or []
-    _save_project(proj)
-    return jsonify(_sanitize_project(proj))
-
-
-@family_bp.route("/project/<project_id>", methods=["DELETE"])
-def family_project_delete(project_id):
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    proj = _load_project(project_id)
-    if not proj:
-        return jsonify({"error": "Not found"}), 404
-    if not _project_visible(proj, user["id"]):
-        return jsonify({"error": "Not found"}), 404
-    path = _project_path(project_id)
-    try:
-        path.unlink(missing_ok=True)
-    except OSError as e:
-        logger.error(f"Failed to delete project {project_id}: {e}")
-        return jsonify({"error": "Failed"}), 500
-    return jsonify({"ok": True})
-
-
-@family_bp.route("/task/check", methods=["POST"])
-def family_task_check():
-    """Set a task's completion state. Repeated requests are idempotent."""
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    data = request.get_json(silent=True) or {}
-    project_id = data.get("project_id")
-    task_id = data.get("task_id")
-    if not project_id or not task_id:
-        return jsonify({"error": "project_id and task_id required"}), 400
-    completed = data.get("completed", True)
-    if not isinstance(completed, bool):
-        return jsonify({"error": "completed (boolean) required"}), 400
-
-    result = set_task_completion(project_id, task_id, user["id"], completed)
-    if result.get("forbidden"):
-        return jsonify({"error": "Not found"}), 404
-    if not result.get("found"):
-        return jsonify({"error": "task not found"}), 404
-    task = result["task"]
-    response = {
-        "ok": True,
-        "completed": completed,
-        "already_completed": result["already_completed"],
-        "completed_by": task.get("completed_by"),
-        "completed_at": task.get("completed_at"),
-    }
-    if project_id == RECURRING_PROJECT_ID:
-        response["recurring"] = True
-    return jsonify(response)
-
-
-@family_bp.route("/planner", methods=["GET"])
-def family_planner_list():
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    _ensure_dirs()
-    try:
-        scheduler_status = _run_due_scheduler()
-    except OSError as exc:
-        logger.error("Scheduler run failed while loading planner: %s", exc)
-        scheduler_status = {"added": 0, "error": str(exc)}
-    now, _ = _get_tz_aware_now()
-    items = parse_planner(_read_file(PLANNER_FILE) or "")
-    items.sort(key=lambda item: (not item.get("active", True), item.get("title", "").lower()))
-    users = [
-        {"id": item.get("id"), "display": item.get("username") or item.get("id")}
-        for item in _main_module().get_all_users()
-    ]
-    return jsonify({
-        "items": [_planner_api_item(item, now.date()) for item in items],
-        "users": users,
-        "recurrences": list(RECURRENCE_OPTIONS),
-        "today": now.date().isoformat(),
-        "scheduler": scheduler_status,
-    })
-
-
-@family_bp.route("/planner", methods=["POST"])
-def family_planner_create():
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    data = request.get_json(silent=True) or {}
-    try:
-        item = _create_recurring_plan(
-            title=data.get("title"),
-            user_uid=data.get("user"),
-            recurrence=data.get("recurrence"),
-            start_date=data.get("start_date"),
-            active=data.get("active", True),
-            created_by=user["id"],
-        )
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    except OSError as exc:
-        logger.error("Failed to create planner item: %s", exc)
-        return jsonify({"error": "Plan konnte nicht gespeichert werden"}), 500
-    try:
-        scheduler_status = _run_due_scheduler()
-    except OSError as exc:
-        logger.error("Plan saved, but scheduler run failed: %s", exc)
-        scheduler_status = {"added": 0, "error": "Plan gespeichert, Scheduler-Prüfung fehlgeschlagen"}
-    now, _ = _get_tz_aware_now()
-    return jsonify({
-        "item": _planner_api_item(item, now.date()),
-        "scheduler": scheduler_status,
-    }), 201
-
-
-@family_bp.route("/planner/<plan_id>", methods=["PUT"])
-def family_planner_update(plan_id):
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    data = request.get_json(silent=True) or {}
-    now, _ = _get_tz_aware_now()
-
-    def update_item(content):
-        items = parse_planner(content)
-        for item in items:
-            if item.get("id") != plan_id:
-                continue
-            merged = {
-                **item,
-                **{key: data[key] for key in ("title", "user", "recurrence", "start_date", "active") if key in data},
-            }
-            values = _validate_planner_payload(merged)
-            updated = {
-                **item,
-                **values,
-                "updated_at": now.isoformat(),
-                "updated_by": user["id"],
-            }
-            updated_content, _ = replace_planner_item(content, plan_id, updated)
-            return updated_content, updated
-        return content, None
-
-    try:
-        with scheduler_guard(PLANNER_FILE):
-            item = update_text_file(PLANNER_FILE, update_item)
-        if not item:
-            return jsonify({"error": "Plan nicht gefunden"}), 404
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    except OSError as exc:
-        logger.error("Failed to update planner item %s: %s", plan_id, exc)
-        return jsonify({"error": "Plan konnte nicht gespeichert werden"}), 500
-    try:
-        scheduler_status = _run_due_scheduler()
-    except OSError as exc:
-        logger.error("Plan %s saved, but scheduler run failed: %s", plan_id, exc)
-        scheduler_status = {"added": 0, "error": "Plan gespeichert, Scheduler-Prüfung fehlgeschlagen"}
-    return jsonify({
-        "item": _planner_api_item(item, now.date()),
-        "scheduler": scheduler_status,
-    })
-
-
-@family_bp.route("/planner/<plan_id>", methods=["DELETE"])
-def family_planner_delete(plan_id):
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-
-    def delete_item(content):
-        updated_content, deleted = replace_planner_item(content, plan_id, None)
-        return updated_content, deleted
-
-    try:
-        with scheduler_guard(PLANNER_FILE):
-            deleted = update_text_file(PLANNER_FILE, delete_item)
-    except OSError as exc:
-        logger.error("Failed to delete planner item %s: %s", plan_id, exc)
-        return jsonify({"error": "Plan konnte nicht gelöscht werden"}), 500
-    if not deleted:
-        return jsonify({"error": "Plan nicht gefunden"}), 404
-    return jsonify({"ok": True})
-
-
-@family_bp.route("/planner/run", methods=["POST"])
-def family_planner_run():
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    try:
-        return jsonify({"ok": True, **_run_due_scheduler()})
-    except OSError as exc:
-        logger.error("Manual scheduler run failed: %s", exc)
-        return jsonify({"error": "Scheduler konnte nicht ausgeführt werden"}), 500
-
-
-def sort_shopping_project(project_id, user_id):
-    """Sort one visible shopping list through its configured AI provider.
-
-    This is shared by the direct writing-template import and the Family API so
-    the list always receives persisted category headings and sort positions.
-    """
-    main = _main_module()
-    config = main.load_config()
-
-    shopping_ai = config.get("shopping_ai") or {}
-    provider_id = shopping_ai.get("ai_provider_id")
-    if not provider_id:
-        raise ValueError("shopping_ai.ai_provider_id ist nicht konfiguriert")
-
-    provider = None
-    for p in config.get("ai_providers", []):
-        if p.get("id") == provider_id:
-            provider = p
-            break
-    if not provider:
-        raise ValueError(f"Unbekannter AI-Provider '{provider_id}'")
-
-    system_prompt = shopping_ai.get("system_prompt", "")
-    if not system_prompt:
-        raise ValueError("shopping_ai.system_prompt ist leer")
-
-    proj = _load_project(project_id)
-    if not proj:
-        raise LookupError("Not found")
-    if not _project_visible(proj, user_id):
-        raise LookupError("Not found")
-
-    bestehende = [t for t in proj.get("tasks", []) if not t.get("recurring")]
-    # Index-basiert: KI bekommt nummerierte Items, gibt nur Indizes + ##-Header zurueck.
-    # 1-basierte Indizes, wie sie in der user_message stehen.
-    numbered = []
-    for i, t in enumerate(bestehende, 1):
-        title = (t.get("title", "") or "").strip()
-        if title:
-            numbered.append((i, t))
-
-    user_message = (
-        "Sortiere die folgende Einkaufsliste nach Rubriken.\n"
-        "Du erhältst eine nummerierte Liste. Gib NUR die Zahlen in der neuen Reihenfolge zurück.\n"
-        "Vor jede Rubrik schreibe '## <Rubrikname>' als Überschrift.\n"
-        "Rubriken: Obst & Gemüse, Kühlung, Tiefkühlung, Non-Food, Konserven, Süßigkeiten, Sonstiges.\n"
-        "Gib keine Artikel-Namen aus, nur die Zahlen.\n"
-        "Keine neuen Artikel hinzufügen, keine Erklärungen.\n\n"
-        "Aktuelle Einkaufsliste:\n"
-        + ("\n".join(f"{i}. {t.get('title', '')}" for i, t in numbered) if numbered else "(noch leer)")
-    )
-
-    ai_function = {
-        "system_prompt": system_prompt,
-        "max_tokens": shopping_ai.get("max_tokens", 500),
-        "temperature": shopping_ai.get("temperature", 0.7),
-        "api_url": provider.get("api_url", ""),
-        "api_key": provider.get("api_key", ""),
-        "model": provider.get("model", ""),
-    }
-
-    ai_response = main._call_ai_api(provider, ai_function, user_message)
-
-    # AI-Response parsen (index-basiert):
-    #   '## ...' oder '# ...' oder '**...**' → Gruppenname (Rubrik)
-    #   Zeile mit Integer → Index eines bestehenden Items
-    recurring_tasks = [t for t in proj.get("tasks", []) if t.get("recurring")]
-    index_map = {i: t for i, t in numbered}
-
-    neue_tasks = []
-    current_gruppe = ""
-    used_indices = set()
-    sort_idx = 0
-
-    for line in ai_response.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        # Gruppenüberschrift erkennen: '## X', '# X', '**X**'
-        if stripped.startswith("#"):
-            current_gruppe = stripped.lstrip("#").strip()
-            continue
-        if stripped.startswith("**") and stripped.endswith("**") and len(stripped) > 4:
-            current_gruppe = stripped.strip("*").strip()
-            continue
-        # Integer-Index extrahieren (deckt '3', '3.', '3)', '- 3', '3. Item' ab)
-        m = re.match(r"^\s*[-*]?\s*(\d+)", stripped)
-        if m:
-            idx = int(m.group(1))
-            if idx in index_map and idx not in used_indices:
-                used_indices.add(idx)
-                t = index_map[idx]
-                sort_idx += 1
-                t["sort_index"] = sort_idx
-                if current_gruppe:
-                    t["gruppe"] = current_gruppe
-                else:
-                    t.pop("gruppe", None)
-                neue_tasks.append(t)
-
-    # Items, die die KI nicht erwähnt hat, hinten anhängen (gehen nicht verloren)
-    for i, t in numbered:
-        if i not in used_indices:
-            sort_idx += 1
-            t["sort_index"] = sort_idx
-            t["gruppe"] = "Unsortiert"
-            neue_tasks.append(t)
-
-    proj["tasks"] = recurring_tasks + neue_tasks
-    _save_project(proj)
-
-    return {
-        "sorted_count": len(used_indices),
-        "total_count": len(neue_tasks),
-        "raw_response": ai_response,
-    }
-
-
-@family_bp.route("/project/<project_id>/ai-suggest", methods=["POST"])
-def family_project_ai_suggest(project_id):
-    """Sort an existing shopping list with the configured AI provider."""
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    try:
-        result = sort_shopping_project(project_id, user["id"])
-    except LookupError:
-        return jsonify({"error": "Not found"}), 404
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    except ConnectionError as exc:
-        logger.error("shopping_ai error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-    return jsonify({"ok": True, **result})
-
-
-@family_bp.route("/project/<project_id>/raw", methods=["GET"])
-def family_project_raw_get(project_id):
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    proj = _load_project(project_id)
-    if not proj:
-        return jsonify({"error": "Not found"}), 404
-    if not _project_visible(proj, user["id"]):
-        return jsonify({"error": "Not found"}), 404
-    path = _project_path(project_id)
-    content = _read_file(path) or ""
-    return jsonify({"content": content})
-
-
-@family_bp.route("/project/<project_id>/raw", methods=["PUT"])
-def family_project_raw_put(project_id):
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    proj = _load_project(project_id)
-    if not proj:
-        return jsonify({"error": "Not found"}), 404
-    if not _project_visible(proj, user["id"]):
-        return jsonify({"error": "Not found"}), 404
-    data = request.get_json(silent=True) or {}
-    content = data.get("content")
-    if content is None or not isinstance(content, str):
-        return jsonify({"error": "content (string) required"}), 400
-    _ensure_dirs()
-    path = _project_path(project_id)
-    _atomic_write(path, content)
-    return jsonify({"ok": True})
-
-
-# ─── Smart Shopping-Editor (nur Titel + Completed) ────────────────────
-@family_bp.route("/project/<project_id>/shopping-items", methods=["GET"])
-def family_shopping_items_get(project_id):
-    """Liefert nur die Items (id, title, completed) eines Einkaufslisten-Projekts."""
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    proj = _load_project(project_id)
-    if not proj:
-        return jsonify({"error": "Not found"}), 404
-    if not _project_visible(proj, user["id"]):
-        return jsonify({"error": "Not found"}), 404
-    items = []
-    for t in proj.get("tasks", []):
-        if t.get("source") == "recurring":
-            continue
-        items.append({
-            "id": t.get("id"),
-            "title": t.get("title", ""),
-            "completed": bool(t.get("completed")),
-        })
-    return jsonify({"items": items})
-
-
-@family_bp.route("/project/<project_id>/shopping-items", methods=["PUT"])
-def family_shopping_items_put(project_id):
-    """Ersetzt alle Items eines Einkaufslisten-Projekts.
-
-    Body: {items: [{id?: str, title: str, completed?: bool}, ...]}
-
-    - Items mit vorhandener id → Titel/Completed aktualisieren, Metadaten bleiben.
-    - Items ohne id → neuer Task wird angelegt.
-    - Tasks deren id nicht in items vorkommen → werden geloescht.
-    """
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    proj = _load_project(project_id)
-    if not proj:
-        return jsonify({"error": "Not found"}), 404
-    if not _project_visible(proj, user["id"]):
-        return jsonify({"error": "Not found"}), 404
-
-    data = request.get_json(silent=True) or {}
-    items = data.get("items")
-    if not isinstance(items, list):
-        return jsonify({"error": "items (list) required"}), 400
-
-    now, _ = _get_tz_aware_now()
-    existing = {t.get("id"): t for t in proj.get("tasks", []) if t.get("source") != "recurring"}
-    new_tasks = []
-    current_group = ""
-    for item in items:
-        title = str(item.get("title", "")).strip()
-        if not title:
-            continue
-        heading = _shopping_heading_title(title)
-        if heading:
-            current_group = heading
-            continue
-        item_id = item.get("id")
-        completed = bool(item.get("completed", False))
-        if item_id and item_id in existing:
-            t = existing[item_id]
-            t["title"] = title
-            if current_group:
-                t["gruppe"] = current_group
-            if t.get("completed") != completed:
-                if completed:
-                    t["completed"] = True
-                    t["completed_at"] = now.isoformat()
-                    t["completed_by"] = user["id"]
-                else:
-                    t["completed"] = False
-                    t["completed_at"] = None
-                    t["completed_by"] = None
-            new_tasks.append(t)
-        else:
-            new_task = {
-                "id": str(uuid.uuid4()),
-                "title": title,
-                "user": "",
-                "target_date": "",
-                "completed": completed,
-                "created_at": now.isoformat(),
-                "created_by": user["id"],
-                "completed_at": now.isoformat() if completed else None,
-                "completed_by": user["id"] if completed else None,
-            }
-            if current_group:
-                new_task["gruppe"] = current_group
-            new_tasks.append(new_task)
-
-    recurring_tasks = [t for t in proj.get("tasks", []) if t.get("source") == "recurring"]
-    proj["tasks"] = new_tasks + recurring_tasks
-    _save_project(proj)
-    return jsonify({"ok": True, "count": len(new_tasks)})
-
-
-@family_bp.route("/project/<project_id>/shopping-clean", methods=["POST"])
-def family_shopping_clean(project_id):
-    """Remove completed items, or optionally all items, from a shopping list."""
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    path = _project_path(project_id)
-    if path is None:
-        return jsonify({"error": "Not found"}), 404
-    data = request.get_json(silent=True) or {}
-    clear_all = data.get("clear_all") is True
-
-    def clean(content):
-        project = parse_project_content(content, path.name)
-        if not _project_visible(project, user["id"]):
-            return content, {"forbidden": True}
-        if not _is_shopping_project(project):
-            return content, {"not_shopping": True}
-
-        tasks = project.get("tasks", [])
-        remaining = (
-            [task for task in tasks if task.get("source") == "recurring"]
-            if clear_all
-            else [
-                task for task in tasks
-                if task.get("source") == "recurring" or not task.get("completed")
-            ]
-        )
-        removed = len(tasks) - len(remaining)
-        if not removed:
-            return content, {"removed": 0}
-        project["tasks"] = remaining
-        return serialize_project(project), {"removed": removed}
-
-    result = update_text_file(path, clean) or {}
-    if result.get("forbidden"):
-        return jsonify({"error": "Not found"}), 404
-    if result.get("not_shopping"):
-        return jsonify({"error": "Not a shopping list"}), 400
-    return jsonify({"ok": True, "removed": result.get("removed", 0), "cleared_all": clear_all})
-
-
-# ─── Einheitlicher Editor (Tasks + Kommentare) ───────────────────────
-@family_bp.route("/project/<project_id>/editor", methods=["GET"])
-def family_project_editor_get(project_id):
-    """Liefert Tasks + Kommentare + User-Liste fuer den schlaugen Editor.
-
-    Response: {
-        mode: 'compact' | 'full',        # compact bei Einkaufsliste
-        title: str,
-        tasks: [{id, title, completed, user, target_date, source, recurrence}],
-        comments: [{id, user, text, created_at, user_display}],
-        users: [{id, display}],
-    }
-    """
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    proj = _load_project(project_id)
-    if not proj:
-        return jsonify({"error": "Not found"}), 404
-    if not _project_visible(proj, user["id"]):
-        return jsonify({"error": "Not found"}), 404
-
-    is_shopping = _is_shopping_project(proj)
-    mode = "compact" if is_shopping else "full"
-
-    tasks = []
-    for t in proj.get("tasks", []):
-        tasks.append({
-            "id": t.get("id"),
-            "title": t.get("title", ""),
-            "completed": bool(t.get("completed")),
-            "user": t.get("user", ""),
-            "target_date": t.get("target_date", ""),
-            "source": t.get("source", "manual"),
-            "recurrence": t.get("recurrence"),
-        })
-    comments = []
-    for c in proj.get("comments", []):
-        comments.append({
-            "id": c.get("id"),
-            "user": c.get("user", ""),
-            "text": c.get("text", ""),
-            "created_at": c.get("created_at", ""),
-            "user_display": _user_display(c.get("user")),
-        })
-    users = []
-    main = _main_module()
-    all_users = main.get_all_users() if hasattr(main, "get_all_users") else []
-    for u in all_users:
-        users.append({"id": u.get("id"), "display": u.get("username") or u.get("id")})
-
-    return jsonify({
-        "mode": mode,
-        "title": proj.get("title") or "",
-        "tasks": tasks,
-        "comments": comments,
-        "users": users,
-    })
-
-
-@family_bp.route("/project/<project_id>/editor", methods=["PUT"])
-def family_project_editor_put(project_id):
-    """Ersetzt Tasks und Kommentare eines Projekts (einheitlicher Editor).
-
-    Body: {
-        tasks: [{id?: str, title: str, completed?: bool,
-                 user?: str, target_date?: str}],
-        comments: [{id?: str, user: str, text: str, created_at?: str}],
-        deleted_comment_ids: [str, ...]
-    }
-
-    Tasks:
-      - mit vorhandener id → title/completed/user/target_date aktualisieren,
-        restliche Metadaten bleiben erhalten.
-      - ohne id → neuer Task (defaults created_at/created_by).
-      - Tasks deren id nicht in tasks vorkommen → geloescht
-        (ausser recurring-Tasks, diese bleiben unveraendert erhalten).
-    Kommentare:
-      - mit vorhandener id → unveraendert (nur anzeigen, nicht editieren).
-      - ohne id → neu anlegen.
-      - in deleted_comment_ids → entfernen.
-    """
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    proj = _load_project(project_id)
-    if not proj:
-        return jsonify({"error": "Not found"}), 404
-    if not _project_visible(proj, user["id"]):
-        return jsonify({"error": "Not found"}), 404
-
-    data = request.get_json(silent=True) or {}
-    tasks_in = data.get("tasks")
-    if not isinstance(tasks_in, list):
-        return jsonify({"error": "tasks (list) required"}), 400
-    comments_in = data.get("comments")
-    if not isinstance(comments_in, list):
-        comments_in = []
-    deleted_comment_ids = data.get("deleted_comment_ids")
-    if not isinstance(deleted_comment_ids, list):
-        deleted_comment_ids = []
-
-    now, _ = _get_tz_aware_now()
-
-    # --- Tasks zusammenfuehren ---
-    existing = {t.get("id"): t for t in proj.get("tasks", []) if t.get("source") != "recurring"}
-    new_tasks = []
-    current_group = ""
-    for item in tasks_in:
-        title = str(item.get("title", "")).strip()
-        if not title:
-            continue
-        if is_shopping:
-            heading = _shopping_heading_title(title)
-            if heading:
-                current_group = heading
-                continue
-        item_id = item.get("id")
-        completed = bool(item.get("completed", False))
-        user_val = str(item.get("user", "")).strip()
-        target_date = str(item.get("target_date", "")).strip()
-        if item_id and item_id in existing:
-            t = existing[item_id]
-            t["title"] = title
-            t["user"] = user_val
-            t["target_date"] = target_date
-            if current_group:
-                t["gruppe"] = current_group
-            if t.get("completed") != completed:
-                if completed:
-                    t["completed"] = True
-                    t["completed_at"] = now.isoformat()
-                    t["completed_by"] = user["id"]
-                else:
-                    t["completed"] = False
-                    t["completed_at"] = None
-                    t["completed_by"] = None
-            new_tasks.append(t)
-        else:
-            new_task = {
-                "id": str(uuid.uuid4()),
-                "title": title,
-                "user": user_val,
-                "target_date": target_date,
-                "completed": completed,
-                "created_at": now.isoformat(),
-                "created_by": user["id"],
-                "completed_at": now.isoformat() if completed else None,
-                "completed_by": user["id"] if completed else None,
-            }
-            if is_shopping and current_group:
-                new_task["gruppe"] = current_group
-            new_tasks.append(new_task)
-
-    recurring_tasks = [t for t in proj.get("tasks", []) if t.get("source") == "recurring"]
-    proj["tasks"] = new_tasks + recurring_tasks
-
-    # --- Kommentare zusammenfuehren ---
-    existing_comments = {c.get("id"): c for c in proj.get("comments", [])}
-    deleted_set = set(deleted_comment_ids)
-    new_comments = []
-    for c in existing_comments.values():
-        if c.get("id") in deleted_set:
-            continue
-        new_comments.append(c)
-    for c in comments_in:
-        cid = c.get("id")
-        if cid:
-            continue  # bestehende Kommentare nicht editieren
-        text = str(c.get("text", "")).strip()
-        if not text:
-            continue
-        new_comments.append({
-            "id": str(uuid.uuid4()),
-            "user": str(c.get("user", "")).strip(),
-            "text": text,
-            "created_at": now.isoformat(),
-        })
-
-    proj["comments"] = new_comments
-
-    _save_project(proj)
-    return jsonify({"ok": True, "task_count": len(new_tasks), "comment_count": len(new_comments)})
-
-
-@family_bp.route("/search", methods=["GET"])
-def family_search():
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    q = (request.args.get("q") or "").strip().lower()
-    if not q:
-        return jsonify({"results": []})
-
-    uid = user["id"]
-    results = []
-
-    def _matches_user_id_or_name(uid_or_name):
-        if not uid_or_name:
-            return False
-        if q in uid_or_name.lower():
-            return True
-        name = _user_display(uid_or_name).lower()
-        return q in name
-
-    for path in _all_project_paths():
-        proj = parse_project_file(path)
-        if not proj:
-            continue
-        if not _project_visible(proj, uid):
-            continue
-        pid = proj.get("id")
-        ptitle = proj.get("title") or ""
-        if q in ptitle.lower():
-            results.append({
-                "project_id": pid,
-                "project_title": ptitle,
-                "task_id": None,
-                "task_title": None,
-                "match_field": "project_title",
-            })
-        for t in proj.get("tasks", []):
-            ttitle = t.get("title") or ""
-            matched = None
-            if q in ttitle.lower():
-                matched = "task_title"
-            elif _matches_user_id_or_name(t.get("user") or ""):
-                matched = "responsible"
-            if matched:
-                results.append({
-                    "project_id": pid,
-                    "project_title": ptitle,
-                    "task_id": t.get("id"),
-                    "task_title": ttitle,
-                    "match_field": matched,
-                })
-        for c in proj.get("comments", []):
-            text = c.get("text") or ""
-            if q in text.lower():
-                results.append({
-                    "project_id": pid,
-                    "project_title": ptitle,
-                    "task_id": None,
-                    "task_title": None,
-                    "match_field": "comment",
-                })
-    return jsonify({"results": results})
-
-
-@family_bp.route("/archive", methods=["GET"])
-def family_archive_list():
-    _ensure_dirs()
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    items = []
-    if ARCHIVE_DIR.is_dir():
-        for p in sorted(ARCHIVE_DIR.glob("*.md")):
-            item = _parse_archive_file(p)
-            if item and _archive_item_visible(item, user["id"]):
-                items.append(item)
-    return jsonify({"items": items})
-
-
-@family_bp.route("/archive/<task_id>", methods=["POST"])
-def family_archive_item(task_id):
-    """Archiviert einen einzelnen erledigten Task sofort."""
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    for path in _all_project_paths():
-        proj = parse_project_file(path)
-        if not _project_visible(proj, user["id"]):
-            continue
-        for t in proj.get("tasks", []):
-            if t.get("id") == task_id:
-                if not t.get("completed"):
-                    # automatisch als erledigt markieren
-                    now, _ = _get_tz_aware_now()
-                    t["completed"] = True
-                    t["completed_at"] = now.isoformat()
-                    t["completed_by"] = user["id"]
-                if not _archive_task(proj["id"], t):
-                    return jsonify({"error": "invalid task id"}), 409
-                proj["tasks"] = [x for x in proj.get("tasks", []) if x.get("id") != task_id]
-                _atomic_write(path, serialize_project(proj))
-                return jsonify({"ok": True, "archived": task_id})
-    return jsonify({"error": "task not found"}), 404
-
-
-@family_bp.route("/notifications", methods=["GET"])
-def family_notifications():
-    """Badge-Status {blue, red}.
-
-    Blau: seit last_family_visit haben andere User sichtbare Items erstellt.
-    Rot:  mindestens eine offene sichtbare Task ist heute oder früher fällig.
-    """
-    _ensure_dirs()
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    try:
-        _run_due_scheduler()
-    except OSError as exc:
-        logger.error("Scheduler run failed while checking notifications: %s", exc)
-    _archive_overdue_completed()
-    uid = user["id"]
-    now, _ = _get_tz_aware_now()
-    today_str = now.strftime("%Y-%m-%d")
-
-    last_visit_str = user.get("last_family_visit")
-    last_visit = None
-    if last_visit_str:
-        try:
-            lv = datetime.fromisoformat(last_visit_str)
-            if lv.tzinfo is None:
-                lv = lv.replace(tzinfo=timezone.utc)
-            last_visit = lv
-        except (ValueError, TypeError):
-            last_visit = None
-
-    blue = False
-    red = False
-
-    recurring = parse_recurring_tasks()
-
-    for path in _all_project_paths():
-        proj = parse_project_file(path)
-        if not proj:
-            continue
-        if not _project_visible(proj, uid):
-            continue
-        # Blue: Projekt selbst
-        if proj.get("created_by") and proj["created_by"] != uid:
-            ca = _parse_iso(proj.get("created_at"))
-            if ca and (last_visit is None or ca > last_visit):
-                blue = True
-        for t in proj.get("tasks", []):
-            # Blue
-            if t.get("created_by") and t["created_by"] != uid:
-                ca = _parse_iso(t.get("created_at"))
-                if ca and (last_visit is None or ca > last_visit):
-                    blue = True
-            # Red: offene Task heute faellig
-            if not t.get("completed") and t.get("target_date"):
-                td = t["target_date"].strip()
-                if td <= today_str:
-                    red = True
-    for task in recurring:
-        if task.get("created_by") and task["created_by"] != uid:
-            created_at = _parse_iso(task.get("created_at"))
-            if created_at and (last_visit is None or created_at > last_visit):
-                blue = True
-        if not task.get("completed") and task.get("target_date"):
-            if task["target_date"].strip() <= today_str:
-                red = True
-
-    return jsonify({"blue": blue, "red": red})
-
-
-@family_bp.route("/visit", methods=["POST"])
-def family_visit():
-    """Setzt last_family_visit = now auf dem User-Objekt."""
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-    csrf_err = _check_csrf()
-    if csrf_err:
-        return csrf_err
-    now, _ = _get_tz_aware_now()
-    user["last_family_visit"] = now.isoformat()
-    _main_module().update_user(user)
-    return jsonify({"ok": True})
-
-
-# ─── Helfer: ISO-Parser ───────────────────────────────────────────────
 def _parse_iso(s):
     if not s:
         return None
@@ -1756,12 +497,23 @@ def _sanitize_project(proj):
     out = {
         "id": proj.get("id"),
         "title": proj.get("title"),
+        "type": family_views.normalize_type(proj.get("type")),
         "template_id": proj.get("template_id"),
         "target_file": proj.get("target_file") or None,
         "assigned_users": proj.get("assigned_users", []),
         "created_at": proj.get("created_at"),
         "created_by": proj.get("created_by"),
         "created_by_display": _user_display(proj.get("created_by")),
+        "updated_at": proj.get("updated_at"),
+        "owner": proj.get("owner") or None,
+        "archived_at": proj.get("archived_at") or None,
+        "exclude_from_personal": bool(proj.get("exclude_from_personal")),
+        "personal": family_views.is_personal_bucket(proj),
+        # Der freie Notiztext gehoert zur Karte: ohne ihn zeigt eine Notiz mit
+        # Aufgaben nur noch die Aufgaben. `notes` steht ueber der Aufgabenliste,
+        # `notes_after` darunter - so, wie beides in der Datei liegt.
+        "notes": proj.get("notes") or "",
+        "notes_after": proj.get("notes_after") or "",
         "tasks": [],
         "comments": [],
         "file": proj.get("file"),
@@ -1785,6 +537,10 @@ def _sanitize_project(proj):
             "plan_id": t.get("plan_id"),
             "sort_index": t.get("sort_index"),
             "gruppe": t.get("gruppe", ""),
+            # Nur in Sammelansichten gesetzt: wo die Aufgabe wirklich lebt.
+            "origin_id": t.get("origin_id"),
+            "origin_title": t.get("origin_title"),
+            "origin_accessible": t.get("origin_accessible", True),
         })
     for c in proj.get("comments", []):
         out["comments"].append({
@@ -1881,3 +637,24 @@ def create_standalone_project(title, template_id, assigned_users=None, created_b
     path = _project_path(pid)
     _atomic_write(path, serialize_project(proj))
     return proj
+
+
+# Document persistence loads before the routes: it builds on the parsers above
+# and its helpers must be part of the facade the route modules copy from.
+import family_documents as _family_documents
+for _export_name in _family_documents.__all__:
+    globals()[_export_name] = getattr(_family_documents, _export_name)
+
+# Route modules load last so every parser, serializer and write helper above is
+# available to their compatibility context. Keep route ownership split by domain.
+import family_routes as _family_routes
+for _export_name in _family_routes.__all__:
+    globals()[_export_name] = getattr(_family_routes, _export_name)
+
+import family_content_routes as _family_content_routes
+for _export_name in _family_content_routes.__all__:
+    globals()[_export_name] = getattr(_family_content_routes, _export_name)
+
+import family_board_routes as _family_board_routes
+for _export_name in _family_board_routes.__all__:
+    globals()[_export_name] = getattr(_family_board_routes, _export_name)

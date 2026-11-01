@@ -9,6 +9,7 @@ from that facade before each request.
 """
 
 import sys
+import time
 
 _core = sys.modules.get("main") or sys.modules.get("__main__")
 if _core is None:  # pragma: no cover - import order is a hard application invariant
@@ -26,6 +27,99 @@ def _sync_runtime():
 @app.before_request
 def _sync_writing_ai_helpers_runtime():
     _sync_runtime()
+
+
+# Sockel-Timeout eines Modellaufrufs. Cloud-Antworten sind schnell genug; nur
+# Aufrufer mit langen lokalen Laeufen (z.B. die Journal-Analyse) setzen mehr.
+AI_REQUEST_TIMEOUT = 300
+_AI_TIMEOUT_MIN = 30
+_AI_TIMEOUT_MAX = 7200
+
+
+def _ai_timeout(ai_function, provider):
+    """Zeitlimit des Modellaufrufs in Sekunden, begrenzt auf 30..7200.
+
+    ``ai_function`` gewinnt gegen den Anbieter, damit ein einzelner Aufruf
+    sein eigenes Limit mitbringen kann. Ohne Angabe bleibt es bei 300s — das
+    reicht fuer Chat/Korrektur, nicht fuer einen grossen, lokal erzeugten
+    Analyse-Prompt.
+    """
+    value = ai_function.get("timeout", provider.get("timeout"))
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return AI_REQUEST_TIMEOUT
+    return max(_AI_TIMEOUT_MIN, min(_AI_TIMEOUT_MAX, int(value)))
+
+
+def _ai_max_duration(ai_function):
+    """Gesamtdauer eines gestreamten Aufrufs in Sekunden, oder ``None``."""
+    value = ai_function.get("max_duration")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        return None
+    return max(_AI_TIMEOUT_MIN, int(value))
+
+
+# Lokale Endpunkte ignorieren ``max_tokens`` teils (oder zaehlen Reasoning nicht
+# mit): ein Analyse-Lauf bekam 6,8 MB Stream fuer 3000 bestellte Tokens. Die
+# Bremse greift bei grob dem Zwoelffachen in Zeichen - Platz fuer Denktext,
+# aber kein Endloslauf bis zur Gesamtgrenze.
+_STREAM_CHARS_PER_TOKEN = 12
+_STREAM_CHARS_MIN = 20000
+_STREAM_PROGRESS_SECONDS = 60
+_STREAM_STOP_CHECK_SECONDS = 5
+
+
+def _read_ai_stream(resp, first_line, deadline, max_duration, *, max_chars=None, should_stop=None):
+    """Eine SSE-Antwort (``stream: true``) zu einer ``message`` zusammensetzen.
+
+    Beim Streaming wirkt der Sockel-Timeout als Leerlaufgrenze: Er greift nur,
+    wenn der Anbieter so lange gar nichts schickt. Ein Modell, das langsam,
+    aber stetig erzeugt, laeuft deshalb bis ``deadline`` weiter - es sei denn,
+    es erzeugt weit mehr als bestellt (``max_chars``) oder der Lauf wird
+    abgebrochen (``should_stop``).
+    """
+    content = []
+    reasoning = []
+    produced = 0
+    started = time.monotonic()
+    next_progress = started + _STREAM_PROGRESS_SECONDS
+    next_stop_check = started + _STREAM_STOP_CHECK_SECONDS
+    line = first_line
+    while line:
+        now = time.monotonic()
+        if deadline is not None and now > deadline:
+            raise ConnectionError(f"AI API stream exceeded {max_duration} seconds")
+        if max_chars and produced > max_chars:
+            raise ConnectionError(
+                f"Das Modell hat ueber {max_chars} Zeichen erzeugt, ohne fertig zu werden "
+                f"(Antwort {sum(map(len, content))}, Denktext {sum(map(len, reasoning))}). "
+                "Der Endpunkt beachtet max_tokens offenbar nicht - Lauf abgebrochen.")
+        if should_stop is not None and now >= next_stop_check:
+            next_stop_check = now + _STREAM_STOP_CHECK_SECONDS
+            if should_stop():
+                raise ConnectionError("Modellaufruf abgebrochen.")
+        if now >= next_progress:
+            next_progress = now + _STREAM_PROGRESS_SECONDS
+            logger.info("AI stream running %.0fs: %d chars answer, %d chars reasoning",
+                        now - started, sum(map(len, content)), sum(map(len, reasoning)))
+        text = line.decode("utf-8", errors="replace").strip()
+        if text.startswith("data:"):
+            data = text[5:].strip()
+            if data == "[DONE]":
+                break
+            chunk = json.loads(data)
+            if isinstance(chunk, dict) and chunk.get("error"):
+                error = chunk["error"]
+                detail = error.get("message") if isinstance(error, dict) else error
+                raise ConnectionError(f"AI API stream error: {str(detail)[:500]}")
+            for choice in (chunk.get("choices") or []) if isinstance(chunk, dict) else []:
+                delta = choice.get("delta") or choice.get("message") or {}
+                piece = delta.get("content") or ""
+                thought = delta.get("reasoning_content") or delta.get("reasoning") or ""
+                content.append(piece)
+                reasoning.append(thought)
+                produced += len(piece) + len(thought)
+        line = resp.readline()
+    return {"content": "".join(content), "reasoning_content": "".join(reasoning)}
 
 
 def _call_ai_api(provider, ai_function, user_message, image_attachments=None):
@@ -50,6 +144,7 @@ def _call_ai_api(provider, ai_function, user_message, image_attachments=None):
     system_prompt = ai_function.get("system_prompt", "") or provider.get("system_prompt", "")
     max_tokens = ai_function.get("max_tokens", provider.get("max_tokens", 500))
     temperature = ai_function.get("temperature", provider.get("temperature", 0.7))
+    timeout = _ai_timeout(ai_function, provider)
 
     messages = []
     if system_prompt:
@@ -69,6 +164,23 @@ def _call_ai_api(provider, ai_function, user_message, image_attachments=None):
     }
     if ai_function.get("response_format") is not None:
         payload_data["response_format"] = ai_function["response_format"]
+    # Denk-Budget (llama.cpp): nach so vielen Token Denktext schliesst der
+    # Server das Nachdenken und das Modell antwortet. Nur gesetzt gesendet —
+    # andere Anbieter sollen keinen unbekannten Parameter bekommen.
+    thinking_budget = ai_function.get("thinking_budget", provider.get("thinking_budget"))
+    if isinstance(thinking_budget, int) and not isinstance(thinking_budget, bool) and thinking_budget >= 0:
+        payload_data["thinking_budget_tokens"] = thinking_budget
+    # Lange Laeufe (Journal-Analyse) streamen: ohne Streaming kommt das erste
+    # Byte erst mit der fertigen Antwort, und der Sockel-Timeout bricht ein
+    # noch rechnendes Modell ab.
+    stream = bool(ai_function.get("stream"))
+    if stream:
+        payload_data["stream"] = True
+    max_duration = _ai_max_duration(ai_function) if stream else None
+    max_chars = None
+    if stream:
+        budget = max_tokens if isinstance(max_tokens, int) and max_tokens > 0 else 500
+        max_chars = ai_function.get("max_stream_chars") or max(_STREAM_CHARS_MIN, budget * _STREAM_CHARS_PER_TOKEN)
     payload = json.dumps(payload_data).encode("utf-8")
 
     headers = {
@@ -89,44 +201,63 @@ def _call_ai_api(provider, ai_function, user_message, image_attachments=None):
     if str(provider.get("id", "")).startswith("lm_"):
         models_url = re.sub(r"/chat/completions/?$", "/models", url)
         if models_url == url:
-            raise ValueError("LM Studio api_url must end with /chat/completions")
+            raise ValueError("Lokaler Endpunkt: api_url muss mit /chat/completions enden")
         models_req = urllib.request.Request(models_url, headers=headers, method="GET")
-        logger.info("Checking LM Studio model availability at %s", models_url)
+        logger.info("Pruefe Modell-Liste des lokalen Endpunkts unter %s", models_url)
         try:
             with _no_proxy_opener.open(models_req, timeout=30) as resp:
                 models_result = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
-            raise ConnectionError(f"LM Studio model check failed with HTTP {e.code}: {body[:500]}")
+            raise ConnectionError(f"Modell-Liste des lokalen Endpunkts fehlgeschlagen, HTTP {e.code}: {body[:500]}")
         except urllib.error.URLError as e:
-            raise ConnectionError(f"LM Studio is not reachable: {e.reason}")
+            raise ConnectionError(f"Lokaler Endpunkt nicht erreichbar: {e.reason}")
         except TimeoutError:
-            raise ConnectionError("LM Studio model check timed out after 30 seconds")
+            raise ConnectionError("Modell-Abruf des lokalen Endpunkts hat 30 Sekunden ueberschritten")
         except json.JSONDecodeError as e:
-            raise ConnectionError(f"LM Studio returned an invalid model list: {e}")
+            raise ConnectionError(f"Lokaler Endpunkt meldet eine ungueltige Modell-Liste: {e}")
 
         model_items = models_result.get("data") if isinstance(models_result, dict) else None
         if not isinstance(model_items, list):
-            raise ConnectionError("LM Studio returned an invalid model list")
+            raise ConnectionError("Lokaler Endpunkt meldet eine ungueltige Modell-Liste")
         available_models = {
             item.get("id") for item in model_items
             if isinstance(item, dict) and item.get("id")
         }
         if model not in available_models:
             loaded = ", ".join(sorted(available_models)) or "none"
-            raise ConnectionError(f"LM Studio model '{model}' is not loaded (available: {loaded})")
+            raise ConnectionError(f"Modell '{model}' wird vom lokalen Endpunkt nicht angeboten (verfuegbar: {loaded})")
 
     logger.info(f"AI request → {url} (model={model})")
 
+    started = time.monotonic()
+    deadline = started + max_duration if max_duration else None
+    finish_reason = None
     try:
-        with _no_proxy_opener.open(req, timeout=300) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            choices = result.get("choices", [])
-            if not choices:
-                raise ValueError("No choices in AI response")
-            message = choices[0]["message"]
+        with _no_proxy_opener.open(req, timeout=timeout) as resp:
+            first_line = resp.readline() if stream else b""
+            if stream and first_line.lstrip().startswith((b"data:", b":")):
+                message = _read_ai_stream(resp, first_line, deadline, max_duration, max_chars=max_chars,
+                                          should_stop=ai_function.get("should_stop"))
+                logger.info("AI stream finished after %.0fs (%d chars)",
+                            time.monotonic() - started, len(message["content"]))
+            else:
+                # Ohne Streaming — oder ein Anbieter, der ``stream`` ignoriert
+                # und trotzdem ein einzelnes JSON-Objekt schickt.
+                result = json.loads((first_line + resp.read()).decode("utf-8"))
+                choices = result.get("choices", [])
+                if not choices:
+                    raise ValueError("No choices in AI response")
+                message = choices[0]["message"]
+                finish_reason = choices[0].get("finish_reason")
             content = message.get("content", "") or ""
             if not content.strip():
+                if ai_function.get("require_content") and finish_reason == "length":
+                    # Denk-Modelle verbrauchen das Limit oft komplett fuers
+                    # Nachdenken; ohne Hinweis sah das wie ein Anbieterfehler aus.
+                    raise ValueError(
+                        f"Token-Limit ({max_tokens}) aufgebraucht, bevor das Modell geantwortet hat "
+                        "(vermutlich beim Nachdenken)")
                 if ai_function.get("require_content"):
                     raise ValueError("AI returned no message.content for the required structured output")
                 content = message.get("reasoning_content", "") or ""
@@ -139,7 +270,11 @@ def _call_ai_api(provider, ai_function, user_message, image_attachments=None):
     except urllib.error.URLError as e:
         raise ConnectionError(f"AI API connection failed: {e.reason}")
     except TimeoutError:
-        raise ConnectionError("AI API request timed out after 300 seconds")
+        if stream:
+            raise ConnectionError(
+                f"AI API sent no data for {timeout} seconds "
+                f"(stream stalled after {time.monotonic() - started:.0f}s)")
+        raise ConnectionError(f"AI API request timed out after {timeout} seconds")
     except json.JSONDecodeError as e:
         raise ValueError(f"AI returned non-JSON response: {e}")
     except (KeyError, IndexError) as e:

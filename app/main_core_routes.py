@@ -174,6 +174,24 @@ def api_csrf_token():
     return jsonify({"csrf_token": session["csrf_token"]})
 
 
+# Felder, die nie an den Browser gehen. load_config() setzt die AI_KEY_*-Werte
+# als api_key in die Anbieter ein; /api/config gab sie bis 2026-10-01 jedem
+# angemeldeten Konto mit (D-021: ein Schluessel verlaesst den Server nie).
+# Bewusst exakte Namen bzw. Endungen - "max_tokens" ist kein Geheimnis.
+_SECRET_FIELDS = {"api_key", "apikey", "secret", "client_secret", "password", "token",
+                  "access_token", "refresh_token", "bearer"}
+_SECRET_SUFFIXES = ("_api_key", "_secret", "_password")
+
+
+def _without_secrets(value):
+    if isinstance(value, dict):
+        return {key: _without_secrets(item) for key, item in value.items()
+                if not (str(key).lower() in _SECRET_FIELDS or str(key).lower().endswith(_SECRET_SUFFIXES))}
+    if isinstance(value, list):
+        return [_without_secrets(item) for item in value]
+    return value
+
+
 @app.route("/api/config")
 @require_auth
 def api_config():
@@ -198,7 +216,43 @@ def api_config():
     # in config.json noch ganz - ohne diesen Fallback bliebe der Editor beim
     # Kaltstart ohne die eingebauten Vorschläge (z. B. "-" -> "- [ ] ").
     cfg["text_snippets"] = cfg.get("text_snippets") or list(text_snippets.DEFAULT_SNIPPETS)
-    return jsonify(cfg)
+    return jsonify(_without_secrets(cfg))
+
+
+# ─── Startzeit-Messung (startup-timing.js) ─────────────────────────
+_STARTUP_NUMBERS = ("ready_ms", "hidden_ms", "response_ms", "dom_ms", "load_ms", "scripts", "scripts_cached", "network_kb")
+_STARTUP_PATH_RE = re.compile(r"^/api/[A-Za-z0-9/_.-]{0,80}$")
+
+
+@app.route("/api/diagnostics/startup", methods=["POST"])
+@require_auth
+def api_diagnostics_startup():
+    """Eine Startmessung eines Geraets als eine Logzeile - nur Zahlen.
+
+    Damit lassen sich langsame Starts (iPhone/PWA) aus dem Server-Log
+    auswerten. Gespeichert wird nichts; Inhalte kommen nie mit, von
+    API-Aufrufen nur der Pfad.
+    """
+    csrf_error = csrf_protect(lambda: None)()
+    if csrf_error:
+        return csrf_error
+    data = request.get_json(silent=True) or {}
+    numbers = {}
+    for key in _STARTUP_NUMBERS:
+        value = data.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value < 10_000_000:
+            numbers[key] = int(value)
+    slow = []
+    for item in (data.get("api") or [])[:5]:
+        if isinstance(item, dict) and isinstance(item.get("path"), str) and _STARTUP_PATH_RE.match(item["path"]) \
+                and isinstance(item.get("ms"), (int, float)) and not isinstance(item.get("ms"), bool):
+            slow.append(f"{item['path']}={int(item['ms'])}ms")
+    device = re.sub(r"[^A-Za-z ()]", "", str(data.get("device") or ""))[:30]
+    user = _current_user() or {}
+    logger.info("startup-timing user=%s device=%s sw=%s %s slow_api=[%s]",
+                user.get("id", "?"), device or "?", bool(data.get("service_worker")),
+                " ".join(f"{key}={value}" for key, value in numbers.items()), ", ".join(slow))
+    return jsonify({"ok": True})
 
 
 @app.route("/api/settings/youtube-mode", methods=["GET", "POST"])

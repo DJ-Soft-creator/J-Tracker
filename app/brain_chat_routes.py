@@ -50,7 +50,7 @@ def settings_get():
     settings = brain_chat.load_settings(user["id"])
     return _no_store({
         **brain_chat.public_settings(settings),
-        "tools": [tool["function"]["name"] for tool in brain_chat.tool_specs()],
+        "tools": [tool["function"]["name"] for tool in brain_chat.tool_specs(settings)],
         "max_rounds": brain_chat.MAX_ROUNDS,
     })
 
@@ -65,7 +65,10 @@ def settings_set():
         saved = brain_chat.save_settings(user["id"], data)
     except BrainChatError as exc:
         return jsonify({"error": str(exc)}), 400
-    return jsonify({"ok": True, **brain_chat.public_settings(saved)})
+    return jsonify({
+        "ok": True, **brain_chat.public_settings(saved),
+        "tools": [tool["function"]["name"] for tool in brain_chat.tool_specs(saved)],
+    })
 
 
 @brain_chat_bp.route("/models", methods=["GET"])

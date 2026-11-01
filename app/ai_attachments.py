@@ -79,10 +79,19 @@ _MODEL_CATALOG_CACHE = {"fetched_at": 0.0, "value": None}
 
 def whisper_model(requested=None):
     """Pick the transcription quality step, falling back to the configured default."""
-    default = os.environ.get("WHISPER_MODEL", "base")
+    default = default_whisper_model()
     if isinstance(requested, str) and _MODEL_NAME_RE.fullmatch(requested.strip()):
         return requested.strip()
     return default
+
+
+def default_whisper_model():
+    """Ein einzelnes Modell aus WHISPER_MODEL - eine versehentlich eingetragene
+    Liste (``tiny,base,small``) ergibt ihren ersten Eintrag."""
+    for item in os.environ.get("WHISPER_MODEL", "base").split(","):
+        if _MODEL_NAME_RE.fullmatch(item.strip()):
+            return item.strip()
+    return "base"
 
 
 def whisper_models(whisper_url=None):
@@ -94,7 +103,7 @@ def whisper_models(whisper_url=None):
     now = time.monotonic()
     if _MODEL_CATALOG_CACHE["value"] and now - _MODEL_CATALOG_CACHE["fetched_at"] < 300:
         return _MODEL_CATALOG_CACHE["value"]
-    default = os.environ.get("WHISPER_MODEL", "base")
+    default = default_whisper_model()
     base = (whisper_url or os.environ.get("WHISPER_URL", "http://whisper:8090")).rstrip("/")
     try:
         with urllib.request.urlopen(base + "/v1/models", timeout=5) as response:
@@ -315,6 +324,46 @@ def image_content_blocks(data_root, images):
     return blocks
 
 
+VOICE_UPLOAD_LIMIT = 64 * 1024 * 1024
+PROVIDED_TRANSCRIPT_LIMIT = 100_000
+
+
+def _transcribe_with_voice(upload, form):
+    """Dieselbe Sprachnachricht ueber den lokalen Voice-Anbieter (MacMini).
+
+    Der MacMini-ASR nimmt nur WAV; das Original ist webm/m4a und im Container
+    gibt es kein ffmpeg. Deshalb dekodiert der Browser die Aufnahme und schickt
+    hier die WAV-Fassung mit - gespeichert wird weiter nur das Original.
+    """
+    import sys
+    import tempfile
+    import voice
+
+    raw = upload.read(VOICE_UPLOAD_LIMIT + 1)
+    if not raw or len(raw) > VOICE_UPLOAD_LIMIT:
+        raise AiAttachmentError("Die WAV-Fassung der Sprachnachricht fehlt oder ist zu groß.")
+    core = sys.modules.get("main") or sys.modules.get("__main__")
+    provider = voice.resolve_provider(core.load_config(), str(form.get("provider_id") or ""))
+    if provider is None:
+        raise AiAttachmentError("Kein lokaler Voice-Anbieter konfiguriert.")
+    model = str(form.get("model") or "").strip() or voice.load_settings(core.CONFIG_PATH).get("asr_model") \
+        or voice.DEFAULT_ASR_MODEL
+    handle = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    try:
+        handle.write(raw)
+        handle.close()
+        text = voice.transcribe(handle.name, voice.provider_base_url(provider.get("api_url")), model,
+                                language=str(form.get("language") or "de"))
+    except voice.VoiceError as exc:
+        raise AiAttachmentError(str(exc)) from exc
+    finally:
+        try:
+            os.unlink(handle.name)
+        except OSError:
+            pass
+    return {"text": text, "engine": "voice", "provider_id": provider.get("id"), "model": model}, text
+
+
 @write_sessions.write_sessions_bp.route("/media/<media_id>/transcribe", methods=["POST"])
 def transcribe_media_now(media_id):
     """Transcribe one still-unsent voice message right away, instead of waiting
@@ -327,7 +376,15 @@ def transcribe_media_now(media_id):
         return csrf
     if not write_sessions._ID_RE.fullmatch(media_id or ""):
         return jsonify({"error": "Sprachnachricht nicht gefunden"}), 404
-    model = whisper_model((request.get_json(silent=True) or {}).get("model"))
+    # engine=voice: Transkription ueber den MacMini, die WAV kommt vom Browser.
+    voice_upload = request.files.get("file") if request.form.get("engine") == "voice" else None
+    payload = request.get_json(silent=True) or {}
+    model = whisper_model(payload.get("model"))
+    # Die Sternchen-Aufnahme hat schon transkribiert: ihr Rohtext wird nur noch
+    # abgelegt, damit der Chip ihn zeigt. ``inline`` heisst, derselbe Text
+    # steht bereits im Editor - dann schreibt das Senden keinen zweiten Block.
+    provided = payload.get("transcript") if isinstance(payload.get("transcript"), str) else ""
+    provided = provided.strip()[:PROVIDED_TRANSCRIPT_LIMIT]
     media_dir = next((path for path in write_sessions._root(user["id"]).glob(f"*/media/{media_id}") if path.is_dir()), None)
     item = write_sessions._read_json(media_dir / "metadata.json") if media_dir else None
     if not item or item.get("user_id") != user["id"] or item.get("type") != "audio":
@@ -340,6 +397,18 @@ def transcribe_media_now(media_id):
         return jsonify({"error": "Aufnahme wird noch gesichert"}), 409
     if item.get("transcription_status") == "completed":
         return jsonify(item)
+    if provided:
+        transcript = {"text": provided, "engine": "voice", "source": "browser"}
+        with path_lock(directory / ".session", exclusive=True):
+            current = write_sessions._read_json(media_dir / "metadata.json")
+            if isinstance(current, dict):
+                current.update(transcript_inline=bool(payload.get("inline")))
+                write_sessions._write_json(media_dir / "metadata.json", current)
+        try:
+            _persist_transcript(directory, item, transcript, provided)
+        except AiAttachmentError as exc:
+            return jsonify({"error": str(exc)}), 409
+        return jsonify(write_sessions._read_json(media_dir / "metadata.json"))
     name = item.get("original_name")
     original = media_dir / name if isinstance(name, str) and Path(name).name == name else None
     if not original or not original.is_file() or original.is_symlink():
@@ -351,10 +420,13 @@ def transcribe_media_now(media_id):
         current.update(transcription_status="running", updated_at=write_sessions._iso(write_sessions._now()))
         write_sessions._write_json(media_dir / "metadata.json", current)
     try:
-        transcript, text = _transcribe(
-            original, os.environ.get("WHISPER_URL", "http://whisper:8090"), os.environ.get("WHISPER_API_KEY", ""),
-            model,
-        )
+        if voice_upload is not None:
+            transcript, text = _transcribe_with_voice(voice_upload, request.form)
+        else:
+            transcript, text = _transcribe(
+                original, os.environ.get("WHISPER_URL", "http://whisper:8090"), os.environ.get("WHISPER_API_KEY", ""),
+                model,
+            )
         _persist_transcript(directory, item, transcript, text)
     except AiAttachmentError as exc:
         with path_lock(directory / ".session", exclusive=True):

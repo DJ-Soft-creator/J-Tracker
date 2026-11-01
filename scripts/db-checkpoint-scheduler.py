@@ -17,11 +17,16 @@ import db  # noqa: E402
 from revisions import promote_due_checkpoints  # noqa: E402
 
 
+def _storage_prefix():
+    """Root-Key-Prefix: PROD-Spiegel nutzt 'prod-user', DEV bleibt bei 'dev-user'."""
+    return os.environ.get("JOURNL_DB_STORAGE_PREFIX", "dev-user").strip()
+
+
 def _media_roots(data_dir):
     root = Path(data_dir)
     if root.is_symlink() or not root.is_dir():
         return {}
-    return {"dev-user-" + path.name: path for path in root.iterdir()
+    return {_storage_prefix() + "-" + path.name: path for path in root.iterdir()
             if path.is_dir() and not path.is_symlink()}
 
 

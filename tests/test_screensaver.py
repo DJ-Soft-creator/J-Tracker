@@ -1,6 +1,7 @@
 """Bildschirmschoner: Quellen, Playlist-Manifeste und Bildauslieferung."""
 
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -100,6 +101,37 @@ class ScreensaverTests(unittest.TestCase):
         response = self.client.post("/api/screensaver/settings", headers=self.headers, json={"sources": ["nope"]})
         self.assertEqual(response.get_json()["settings"]["sources"], ["theme:landscapes"])
 
+    def test_visual_settings_default_off_and_are_clamped(self):
+        payload = self.client.get("/api/screensaver/settings").get_json()
+        self.assertEqual(payload["settings"]["visual"], screensaver.screensaver_visual.DEFAULT_VISUAL)
+        response = self.client.post("/api/screensaver/settings", headers=self.headers, json={
+            "visual": {"enabled": True, "form": "ink", "blend": "laser", "strength": 900, "quality": "full",
+                       "reaction": "brutal"},
+        })
+        visual = response.get_json()["settings"]["visual"]
+        self.assertEqual(visual, {"enabled": True, "form": "ink", "blend": "glow", "strength": 100, "quality": "full",
+                                  "reaction": "beat"})
+
+    def test_visual_accepts_the_psychedelic_forms_and_the_wild_reaction(self):
+        for form in ("kaleido", "mandala", "tunnel", "fractal", "plasma"):
+            response = self.client.post("/api/screensaver/settings", headers=self.headers,
+                                        json={"visual": {"form": form, "reaction": "wild"}})
+            visual = response.get_json()["settings"]["visual"]
+            self.assertEqual((visual["form"], visual["reaction"]), (form, "wild"))
+
+    def test_no_images_stands_alone_and_yields_an_empty_playlist(self):
+        self._collection("Berge", count=2)
+        mixed = self.client.post("/api/screensaver/settings", headers=self.headers,
+                                 json={"sources": ["none", "local:Berge"]}).get_json()["settings"]
+        self.assertEqual(mixed["sources"], ["local:Berge"])
+        alone = self.client.post("/api/screensaver/settings", headers=self.headers,
+                                 json={"sources": ["none"]}).get_json()["settings"]
+        self.assertEqual(alone["sources"], ["none"])
+        playlist = self.client.get("/api/screensaver/playlist").get_json()
+        self.assertEqual(playlist, {"items": [], "none": True})
+        sources = self.client.get("/api/screensaver/settings").get_json()["sources"]
+        self.assertEqual(sources[0], {"id": "none", "label": "Keine Bilder", "kind": "none"})
+
     def test_settings_need_the_csrf_token(self):
         self.assertEqual(self.client.post("/api/screensaver/settings", json={"interval": 10}).status_code, 403)
 
@@ -136,6 +168,42 @@ class ScreensaverTests(unittest.TestCase):
         self.assertEqual(payload["items"], [])
         self.assertIn("Keine Bilder", payload["error"])
 
+    def test_deselecting_a_folder_removes_it_from_the_next_playlist(self):
+        self._collection("Berge", count=4)
+        self._collection("Nordsee", count=4)
+        self.client.post("/api/screensaver/settings", headers=self.headers,
+                         json={"sources": ["local:Berge", "local:Nordsee"]})
+        self.client.post("/api/screensaver/settings", headers=self.headers, json={"sources": ["local:Nordsee"]})
+        items = self.client.get("/api/screensaver/playlist?count=8").get_json()["items"]
+        self.assertEqual({item["source"] for item in items}, {"Nordsee"})
+
+    def test_spread_order_alternates_between_the_sources(self):
+        self._collection("Berge", count=6)
+        self._collection("Nordsee", count=6)
+        self.client.post("/api/screensaver/settings", headers=self.headers,
+                         json={"sources": ["local:Berge", "local:Nordsee"], "order": "spread"})
+        items = self.client.get("/api/screensaver/playlist?count=6").get_json()["items"]
+        self.assertEqual([item["source"] for item in items], ["Berge", "Nordsee"] * 3)
+
+    def test_sequential_order_pages_through_journal_images_by_date(self):
+        for day in ("12", "03", "20"):
+            directory = self.data / "user-1" / "2026" / "09" / day / "media"
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "foto.png").write_bytes(PNG)
+        self.client.post("/api/screensaver/settings", headers=self.headers,
+                         json={"sources": ["journal"], "order": "sequential", "details": True})
+        first = self.client.get("/api/screensaver/playlist?count=2&offset=0").get_json()
+        self.assertEqual([item["date"] for item in first["items"]], ["03.09.2026", "12.09.2026"])
+        self.assertEqual(first["next_offset"], 2)
+        second = self.client.get("/api/screensaver/playlist?count=2&offset=2").get_json()
+        self.assertEqual([item["date"] for item in second["items"]], ["20.09.2026"])
+        self.assertEqual(second["next_offset"], 0)  # am Ende wieder von vorn
+        self.assertTrue(self.client.get("/api/screensaver/settings").get_json()["settings"]["details"])
+
+    def test_unknown_order_falls_back_to_shuffle(self):
+        response = self.client.post("/api/screensaver/settings", headers=self.headers, json={"order": "chaos"})
+        self.assertEqual(response.get_json()["settings"]["order"], "shuffle")
+
     # ─── Auslieferung ───────────────────────────────────────────────
     def test_an_image_is_served_through_its_manifest(self):
         self._collection("Berge", count=1)
@@ -166,6 +234,114 @@ class ScreensaverTests(unittest.TestCase):
         self.assertEqual(self.client.get(item["src"]).status_code, 200)
         self.user["id"] = "user-2"
         self.assertEqual(self.client.get(item["src"]).status_code, 404)
+
+    # ─── Private Ordner ─────────────────────────────────────────────
+    def _private(self, folder, count=2, user="user-1"):
+        directory = self.data / user / "screensaver" / "ordner" / folder
+        directory.mkdir(parents=True, exist_ok=True)
+        for index in range(count):
+            (directory / f"privat-{index}.png").write_bytes(PNG)
+        return directory
+
+    def _upload(self, folder, name="foto.png", data=PNG):
+        return self.client.post(f"/api/screensaver/folders/{folder}/files", headers=self.headers,
+                                data={"files": (io.BytesIO(data), name)}, content_type="multipart/form-data")
+
+    def test_private_folders_are_their_own_sources_next_to_the_shared_ones(self):
+        self._collection("Berge", count=1)
+        self._private("Berge", count=3)
+        sources = {item["id"]: item for item in self.client.get("/api/screensaver/settings").get_json()["sources"]}
+        self.assertEqual(sources["user:Berge"]["count"], 3)
+        self.assertEqual(sources["user:Berge"]["kind"], "user")
+        self.assertEqual(sources["local:Berge"]["count"], 1)
+
+    def test_files_dropped_in_by_sync_show_up_without_the_app(self):
+        directory = self._private("Sync", count=1)
+        (directory / "unten" ).mkdir()
+        (directory / "unten" / "tief.png").write_bytes(PNG)
+        folders = self.client.get("/api/screensaver/folders").get_json()["folders"]
+        self.assertEqual(folders, [{"name": "Sync", "count": 2, "audio": 0, "bytes": 2 * len(PNG)}])
+
+    def test_private_images_stay_with_their_own_account(self):
+        self._private("Urlaub", count=1)
+        self.client.post("/api/screensaver/settings", headers=self.headers, json={"sources": ["user:Urlaub"]})
+        item = self.client.get("/api/screensaver/playlist?count=1").get_json()["items"][0]
+        self.assertEqual(self.client.get(item["src"]).status_code, 200)
+        self.user["id"] = "user-2"
+        self.assertEqual(self.client.get(item["src"]).status_code, 404)
+        self.assertNotIn("user:Urlaub", [s["id"] for s in self.client.get("/api/screensaver/settings").get_json()["sources"]])
+        self.assertEqual(self.client.get("/api/screensaver/folders/Urlaub").status_code, 404)
+
+    def test_a_folder_is_created_renamed_and_deleted_with_the_selection_following(self):
+        created = self.client.post("/api/screensaver/folders", headers=self.headers, json={"name": "  Ur/laub: 2026  "})
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.get_json()["folder"]["name"], "Urlaub 2026")
+        self.assertEqual(self.client.post("/api/screensaver/folders", headers=self.headers,
+                                          json={"name": "Urlaub 2026"}).status_code, 409)
+        self.assertEqual(self._upload("Urlaub 2026").status_code, 200)
+        self.client.post("/api/screensaver/settings", headers=self.headers,
+                         json={"sources": ["user:Urlaub 2026", "journal"]})
+
+        renamed = self.client.patch("/api/screensaver/folders/Urlaub 2026", headers=self.headers, json={"name": "Sommer"})
+        self.assertEqual(renamed.status_code, 200)
+        self.assertTrue((self.data / "user-1" / "screensaver" / "ordner" / "Sommer" / "foto.png").is_file())
+        self.assertEqual(self.user["screensaver"]["sources"], ["user:Sommer", "journal"])
+
+        deleted = self.client.delete("/api/screensaver/folders/Sommer", headers=self.headers)
+        self.assertEqual(deleted.get_json()["removed"], 1)
+        self.assertFalse((self.data / "user-1" / "screensaver" / "ordner" / "Sommer").exists())
+        self.assertEqual(self.user["screensaver"]["sources"], ["journal"])
+
+    def test_folder_names_can_never_leave_the_own_root(self):
+        for name in ("..", "", "/", " . "):
+            response = self.client.post("/api/screensaver/folders", headers=self.headers, json={"name": name})
+            self.assertEqual(response.status_code, 400, name)
+        hidden = self.client.post("/api/screensaver/folders", headers=self.headers, json={"name": ".versteckt"})
+        self.assertEqual(hidden.get_json()["folder"]["name"], "versteckt")
+        self._private("Echt", count=1)
+        for path in ("/api/screensaver/folders/..", "/api/screensaver/folders/Echt/files/../../../../users.json",
+                     "/api/screensaver/folders/Echt/files/%2E%2E/%2E%2E/question-sets.json"):
+            self.assertIn(self.client.get(path).status_code, (404, 308), path)
+        self.assertEqual(self.client.patch("/api/screensaver/folders/Echt", headers=self.headers,
+                                           json={"name": "../draussen"}).status_code, 200)
+        self.assertTrue((self.data / "user-1" / "screensaver" / "ordner" / "draussen").is_dir())
+
+    def test_uploads_keep_the_original_and_get_a_free_name(self):
+        self.client.post("/api/screensaver/folders", headers=self.headers, json={"name": "Neu"})
+        self.assertEqual(self._upload("Neu", name="../bild.PNG").get_json()["saved"], ["bild.png"])
+        self.assertEqual(self._upload("Neu", name="bild.png").get_json()["saved"], ["bild (2).png"])
+        stored = self.data / "user-1" / "screensaver" / "ordner" / "Neu" / "bild.png"
+        self.assertEqual(stored.read_bytes(), PNG)
+        served = self.client.get("/api/screensaver/folders/Neu/files/bild.png")
+        self.assertEqual(served.data, PNG)
+        served.close()
+
+    def test_uploads_reject_foreign_formats_and_oversized_files(self):
+        self.client.post("/api/screensaver/folders", headers=self.headers, json={"name": "Neu"})
+        rejected = self._upload("Neu", name="skript.svg", data=b"<svg/>")
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(rejected.get_json()["rejected"][0]["name"], "skript.svg")
+        previous = screensaver.MAX_UPLOAD_BYTES
+        screensaver.MAX_UPLOAD_BYTES = 10
+        try:
+            self.assertEqual(self._upload("Neu").status_code, 400)
+        finally:
+            screensaver.MAX_UPLOAD_BYTES = previous
+        self.assertEqual(list((self.data / "user-1" / "screensaver" / "ordner" / "Neu").iterdir()), [])
+
+    def test_a_single_file_is_deleted(self):
+        self._private("Weg", count=2)
+        response = self.client.delete("/api/screensaver/folders/Weg/files/privat-0.png", headers=self.headers)
+        self.assertEqual(response.get_json()["folder"]["count"], 1)
+        self.assertEqual(self.client.delete("/api/screensaver/folders/Weg/files/privat-0.png",
+                                            headers=self.headers).status_code, 404)
+
+    def test_folder_changes_need_the_csrf_token(self):
+        self._private("Schutz", count=1)
+        self.assertEqual(self.client.post("/api/screensaver/folders", json={"name": "x"}).status_code, 403)
+        self.assertEqual(self.client.delete("/api/screensaver/folders/Schutz").status_code, 403)
+        self.assertEqual(self.client.patch("/api/screensaver/folders/Schutz", json={"name": "y"}).status_code, 403)
+        self.assertEqual(self.client.delete("/api/screensaver/folders/Schutz/files/privat-0.png").status_code, 403)
 
     def test_everything_requires_a_session(self):
         main._current_user = lambda: None
@@ -199,6 +375,20 @@ class ScreensaverOverlayTests(unittest.TestCase):
     def test_both_arrow_keys_page_through_the_playlist(self):
         self.assertIn("event.key === 'ArrowLeft'", self.js)
         self.assertIn("function rewind()", self.js)
+
+    def test_the_backdrop_mode_pages_with_buttons(self):
+        """In der Kulisse gehoeren die Pfeiltasten dem Schreibfeld - Knoepfe blaettern."""
+        self.assertIn("[data-prev]').addEventListener('click', () => step(-1))", self.js)
+        self.assertIn("[data-next]').addEventListener('click', () => step(1))", self.js)
+        self.assertIn("!isTyping(event.target)", self.js)
+
+    def test_the_gear_keeps_the_slideshow_running_behind_the_settings(self):
+        """Das Zahnrad beendet den Schoner nicht mehr, Esc schliesst dann nur das Modal."""
+        self.assertIn("[data-settings]').addEventListener('click', () => openSettingsAbove())", self.js)
+        self.assertIn("modal.style.zIndex = '130'", self.js)
+        settings_branch = self.js.split("if (settingsOpen()) {")[1][:160]
+        self.assertIn("window.closeSettings?.()", settings_branch)
+        self.assertNotIn("close(", settings_branch.replace("closeSettings", ""))
 
     def test_a_shortcut_starts_the_slideshow_and_the_desktop_menu_names_it(self):
         self.assertIn("event.code !== 'KeyB'", self.js)

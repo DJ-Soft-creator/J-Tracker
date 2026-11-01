@@ -14,7 +14,19 @@ from faster_whisper import WhisperModel
 
 app = Flask(__name__)
 API_KEY = os.environ.get("WHISPER_API_KEY", "")
-MODEL_NAME = os.environ.get("WHISPER_MODEL", "base")
+def _single_model(value, fallback="base"):
+    """WHISPER_MODEL ist genau ein Modell. Steht dort versehentlich die Liste aus
+    WHISPER_MODELS (PROD 01.10.2026: "tiny,base,small,medium"), gilt der erste
+    Eintrag - sonst versucht faster-whisper ein Modell dieses Namens zu laden
+    und jeder Lauf scheitert."""
+    for item in str(value or "").split(","):
+        item = item.strip()
+        if item:
+            return item
+    return fallback
+
+
+MODEL_NAME = _single_model(os.environ.get("WHISPER_MODEL", "base"))
 COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
 CPU_THREADS = max(1, int(os.environ.get("WHISPER_CPU_THREADS", "4")))
 MODEL_DIR = os.environ.get("WHISPER_MODEL_DIR", "/models")

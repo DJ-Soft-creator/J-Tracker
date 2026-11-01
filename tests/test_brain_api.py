@@ -1,7 +1,6 @@
 """Brain search, catalog, file and editor API behavior tests."""
 
 import importlib.util
-import hashlib
 import json
 import os
 import sys
@@ -9,6 +8,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from datetime import datetime
 from unittest import mock
 
 
@@ -365,99 +365,6 @@ class BrainApiTests(BrainApiCase):
             {"focus", "work", "plan"},
         )
 
-    def test_ai_api_allows_five_minutes_for_response(self):
-        response = mock.MagicMock()
-        response.read.return_value = json.dumps({
-            "choices": [{"message": {"content": "classified"}}]
-        }).encode("utf-8")
-        response.__enter__.return_value = response
-        opener = mock.MagicMock()
-        opener.open.return_value = response
-
-        with mock.patch("urllib.request.build_opener", return_value=opener):
-            result = main._call_ai_api(
-                {"id": "test", "api_url": "http://localhost/v1/chat/completions", "model": "test"},
-                {
-                    "max_tokens": 1234,
-                    "temperature": 0.1,
-                    "response_format": {"type": "json_schema"},
-                },
-                "journal",
-            )
-
-        self.assertEqual(result, "classified")
-        self.assertEqual(opener.open.call_args.kwargs["timeout"], 300)
-        payload = json.loads(opener.open.call_args.args[0].data)
-        self.assertEqual(payload["max_tokens"], 1234)
-        self.assertEqual(payload["temperature"], 0.1)
-        self.assertEqual(payload["response_format"], {"type": "json_schema"})
-
-    def test_ai_api_sends_hash_checked_image_as_openai_content_block(self):
-        image = self.data_dir / "user-a/ai_jobs/attachments/11111111-1111-1111-1111-111111111111/image-1.png"
-        image.parent.mkdir(parents=True)
-        image.write_bytes(b"\x89PNG\r\n\x1a\nprivate-image")
-        attachment = {
-            "type": "image", "mime_type": "image/png",
-            "path": image.relative_to(self.data_dir).as_posix(),
-            "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
-            "byte_size": image.stat().st_size,
-        }
-        response = mock.MagicMock()
-        response.read.return_value = json.dumps({
-            "choices": [{"message": {"content": "described"}}]
-        }).encode("utf-8")
-        response.__enter__.return_value = response
-        opener = mock.MagicMock()
-        opener.open.return_value = response
-
-        with mock.patch("urllib.request.build_opener", return_value=opener), \
-             mock.patch.object(main._main_ai, "DATA_DIR", self.data_dir):
-            result = main._call_ai_api(
-                {"id": "test", "api_url": "http://localhost/v1/chat/completions", "model": "test"},
-                {}, "describe", image_attachments=[attachment],
-            )
-
-        self.assertEqual(result, "described")
-        payload = json.loads(opener.open.call_args.args[0].data)
-        content = payload["messages"][-1]["content"]
-        self.assertEqual(content[0], {"type": "text", "text": "describe"})
-        self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
-
-    def test_ai_api_rejects_reasoning_only_for_required_content(self):
-        response = mock.MagicMock()
-        response.read.return_value = json.dumps({
-            "choices": [{"message": {"content": "", "reasoning_content": "Still thinking"}}]
-        }).encode("utf-8")
-        response.__enter__.return_value = response
-        opener = mock.MagicMock()
-        opener.open.return_value = response
-
-        with mock.patch("urllib.request.build_opener", return_value=opener):
-            with self.assertRaisesRegex(ValueError, "required structured output"):
-                main._call_ai_api(
-                    {"id": "test", "api_url": "http://localhost/v1/chat/completions", "model": "test"},
-                    {"require_content": True},
-                    "journal",
-                )
-
-    def test_ai_api_keeps_reasoning_fallback_for_other_functions(self):
-        response = mock.MagicMock()
-        response.read.return_value = json.dumps({
-            "choices": [{"message": {"content": "", "reasoning_content": "Useful answer"}}]
-        }).encode("utf-8")
-        response.__enter__.return_value = response
-        opener = mock.MagicMock()
-        opener.open.return_value = response
-
-        with mock.patch("urllib.request.build_opener", return_value=opener):
-            result = main._call_ai_api(
-                {"id": "test", "api_url": "http://localhost/v1/chat/completions", "model": "test"},
-                {},
-                "journal",
-            )
-
-        self.assertEqual(result, "Useful answer")
-
     def test_a_chat_session_in_the_day_folder_is_indexed_and_read_only(self):
         """Der Chatverlauf liegt neben dem Journal — und muss auffindbar sein.
 
@@ -489,45 +396,105 @@ class BrainApiTests(BrainApiCase):
         self.assertNotIn("Chat_2026-08-31_14-05-12.md", journals)
         self.assertEqual(brain.ignored_markdown_files("user-a")["count"], 0)
 
-    def test_historical_tagging_start_accepts_only_local_provider(self):
-        """Ein entfernter Anbieter kommt nicht in Frage — die Journale bleiben lokal."""
-        config = {
-            "ai_providers": [
-                {"id": "openrouter", "model": "remote"},
-                {"id": "lm_test", "model": "local"},
-            ],
-            "historical_tagging_ai": {"system_prompt": "test"},
-        }
-        with mock.patch.object(main, "load_config", return_value=config), mock.patch.object(
-            background_runs, "start", return_value={"id": "run-1", "status": "queued"}
-        ) as start_run:
-            remote = self.client.post(
+    def test_historical_tagging_start_requires_a_saved_local_connection(self):
+        """Ohne gespeicherten lokalen Endpunkt startet kein Lauf."""
+        with mock.patch.object(background_runs, "start", return_value={
+            "id": "run-1", "status": "queued"
+        }) as start_run:
+            missing = self.client.post(
                 "/api/brain/tagging/start",
-                json={"start_date": "2026-08-01", "end_date": "2026-08-04", "provider_id": "openrouter"},
+                json={"start_date": "2026-08-01", "end_date": "2026-08-04"},
                 headers=self.headers,
+            )
+            brain.historical_tagging.save_settings(
+                "user-a", {"base_url": "http://127.0.0.1:1234", "model": "local"},
             )
             local = self.client.post(
                 "/api/brain/tagging/start",
-                json={"start_date": "2026-08-01", "end_date": "2026-08-04", "provider_id": "lm_test"},
+                json={"start_date": "2026-08-01", "end_date": "2026-08-04"},
                 headers=self.headers,
             )
 
-        self.assertEqual(remote.status_code, 400)
+        self.assertEqual(missing.status_code, 400)
         self.assertEqual(local.status_code, 202)
         self.assertEqual(start_run.call_count, 1)
         self.assertEqual(start_run.call_args.args[1], brain.historical_tagging.RUN_KIND)
-        self.assertEqual(start_run.call_args.args[2]["provider_id"], "lm_test")
+
+    def test_tagging_settings_and_models_refuse_a_public_endpoint(self):
+        """Die Verbindung bleibt lokal — sonst waeren Journale unterwegs."""
+        remote = self.client.post(
+            "/api/brain/tagging/settings",
+            json={"base_url": "http://example.com:1234", "model": "remote"},
+            headers=self.headers,
+        )
+        saved = self.client.post(
+            "/api/brain/tagging/settings",
+            json={"base_url": "http://127.0.0.1:1234", "model": "local",
+                  "daily": True, "daily_hour": 7},
+            headers=self.headers,
+        )
+        bad_hour = self.client.post(
+            "/api/brain/tagging/settings",
+            json={"base_url": "http://127.0.0.1:1234", "model": "local", "daily_hour": 24},
+            headers=self.headers,
+        )
+        public = self.client.get("/api/brain/tagging/settings")
+
+        self.assertEqual(remote.status_code, 400)
+        self.assertEqual(bad_hour.status_code, 400)
+        self.assertEqual(saved.status_code, 200)
+        self.assertTrue(saved.get_json()["configured"])
+        self.assertEqual(public.get_json()["base_url"], "http://127.0.0.1:1234")
+        self.assertTrue(public.get_json()["enabled"])
+        self.assertEqual(public.get_json()["schedule_time"], "07:00")
+        self.assertNotIn("api_key", public.get_json())
+
+    def test_the_tagging_job_runs_with_its_own_range_and_mode(self):
+        brain.historical_tagging.save_settings(
+            "user-a", {"base_url": "http://127.0.0.1:1234", "model": "local",
+                       "range_days": 3, "mode": "refresh"},
+        )
+        started = {}
+
+        def fake_start(user_id, kind, params, **options):
+            started.update(params=params, options=options)
+            return {"id": "run-2", "kind": kind, "status": "queued", "params": params}
+
+        with mock.patch.object(background_runs, "start", side_effect=fake_start), \
+                mock.patch.object(brain.historical_tagging, "_local_now",
+                                  return_value=datetime(2026, 10, 5, 9, 0)):
+            response = self.client.post("/api/brain/tagging/job/run", json={"preview": True},
+                                        headers=self.headers)
+        job = self.client.get("/api/brain/tagging/job")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(
+            {key: started["params"][key] for key in ("start_date", "end_date", "mode", "preview")},
+            {"start_date": "2026-10-03", "end_date": "2026-10-05", "mode": "refresh", "preview": True},
+        )
+        self.assertEqual(response.get_json()["run"]["scope"]["mode"], "refresh")
+        self.assertEqual(job.status_code, 200)
+        self.assertEqual(job.get_json()["settings"]["range_days"], 3)
+        self.assertNotIn("api_key", job.get_json()["settings"])
+
+    def test_the_tagging_job_needs_a_connection_and_the_csrf_token(self):
+        refused = self.client.post("/api/brain/tagging/job/run", json={}, headers=self.headers)
+        no_token = self.client.post("/api/brain/tagging/job/run", json={})
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn(no_token.status_code, (400, 403))
 
     def test_historical_tagging_start_refuses_a_second_run(self):
         """Zwei Laeufe wuerden dieselben Journale gleichzeitig umschreiben."""
-        config = {"ai_providers": [{"id": "lm_test", "model": "local"}], "historical_tagging_ai": {}}
+        brain.historical_tagging.save_settings(
+            "user-a", {"base_url": "http://127.0.0.1:1234", "model": "local"},
+        )
         running = {"id": "run-1", "kind": brain.historical_tagging.RUN_KIND, "status": "running"}
-        with mock.patch.object(main, "load_config", return_value=config), mock.patch.object(
+        with mock.patch.object(
             background_runs, "start", side_effect=background_runs.RunConflict("läuft schon")
         ), mock.patch.object(background_runs, "active", return_value=running):
             response = self.client.post(
                 "/api/brain/tagging/start",
-                json={"start_date": "2026-08-01", "end_date": "2026-08-04", "provider_id": "lm_test"},
+                json={"start_date": "2026-08-01", "end_date": "2026-08-04"},
                 headers=self.headers,
             )
 
@@ -535,17 +502,15 @@ class BrainApiTests(BrainApiCase):
         self.assertEqual(response.get_json()["run"]["id"], "run-1")
 
     def test_historical_tagging_start_validates_the_date_range(self):
-        config = {"ai_providers": [{"id": "lm_test", "model": "local"}], "historical_tagging_ai": {}}
-        with mock.patch.object(main, "load_config", return_value=config):
+        with mock.patch.object(main, "load_config", return_value={}):
             reversed_range = self.client.post(
                 "/api/brain/tagging/start",
-                json={"start_date": "2026-08-04", "end_date": "2026-08-01", "provider_id": "lm_test"},
+                json={"start_date": "2026-08-04", "end_date": "2026-08-01"},
                 headers=self.headers,
             )
             stale_without_date = self.client.post(
                 "/api/brain/tagging/start",
-                json={"start_date": "2026-08-01", "end_date": "2026-08-04",
-                      "provider_id": "lm_test", "mode": "stale"},
+                json={"start_date": "2026-08-01", "end_date": "2026-08-04", "mode": "stale"},
                 headers=self.headers,
             )
 

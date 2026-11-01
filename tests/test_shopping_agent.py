@@ -27,6 +27,7 @@ if FLASK_AVAILABLE:
     import background_runs
     import brain_chat
     import shopping_agent
+    import shopping_history
 
 
 def _completion(content=None, tool_calls=None):
@@ -221,6 +222,64 @@ class ShoppingAgentTests(unittest.TestCase):
         removed = self._run("remove_items", {"artikel": [1, 3]})
         self.assertEqual(removed["entfernt"], ["Milch", "Tiefkuehlpizza"])
         self.assertEqual(self._titles(), ["Apfel", "Butter", "Brot"])
+
+    # ─── Kaufhistorie / Klassiker ────────────────────────────────────
+    def _bought(self, task_id, title, day, gruppe=""):
+        task = {"id": task_id, "title": title, "completed": True,
+                "completed_at": "{}T18:00:00+00:00".format(day)}
+        if gruppe:
+            task["gruppe"] = gruppe
+        return task
+
+    def test_history_counts_purchases_and_flags_due_staples(self):
+        from datetime import date
+        # Ein Kauf liegt schon im Familien-Archiv, die uebrigen in der Historie.
+        family._archive_task("einkauf", self._bought("b1", "Brot", "2026-01-01"))
+        shopping_history.record("einkauf", [
+            self._bought("b2", "Brot", "2026-01-08", "Backwaren"),
+            self._bought("b3", "2 Brot", "2026-01-15", "Backwaren"),
+            self._bought("m1", "Milch", "2026-01-01"), self._bought("m2", "Milch", "2026-01-15"),
+            self._bought("k1", "Kaese", "2026-01-10"),
+        ])
+        result = shopping_history.summary("einkauf", family._load_project("einkauf"),
+                                          today=date(2026, 1, 21))
+        by_title = {item["titel"]: item for item in result["artikel"]}
+        self.assertEqual(result["artikel"][0]["titel"], "2 Brot")
+        brot = by_title["2 Brot"]
+        self.assertEqual((brot["gekauft"], brot["rhythmus_tage"], brot["faellig"], brot["rubrik"]),
+                         (3, 7, True, "Backwaren"))
+        self.assertFalse(by_title["Milch"]["faellig"])
+        self.assertTrue(by_title["Milch"]["auf_der_liste"])
+        self.assertIsNone(by_title["Kaese"]["rhythmus_tage"])
+        self.assertFalse(by_title["Kaese"]["faellig"])
+
+    def test_a_purchase_counts_once_however_often_it_is_recorded(self):
+        task = self._bought("b1", "Brot", "2026-01-01")
+        self.assertEqual(shopping_history.record("einkauf", [task]), 1)
+        self.assertEqual(shopping_history.record("einkauf", [task]), 0)
+        family._archive_task("einkauf", task)
+        self.assertEqual(len(shopping_history.events("einkauf")), 1)
+
+    def test_removing_bought_items_keeps_them_in_the_history(self):
+        self._write_list("einkauf", ["Milch"], extra_tasks=[self._bought("e1", "Eier", "2026-01-05")])
+        self._run("remove_items", {"artikel": [2]})
+        self.assertEqual([event["title"] for event in shopping_history.events("einkauf")], ["Eier"])
+
+    def test_cleaning_the_list_keeps_bought_items_in_the_history(self):
+        self._write_list("einkauf", ["Milch"], extra_tasks=[self._bought("e1", "Eier", "2026-01-05")])
+        response = self.client.post("/api/family/project/einkauf/shopping-clean", json={},
+                                    headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._titles(), ["Milch"])
+        self.assertEqual([event["title"] for event in shopping_history.events("einkauf")], ["Eier"])
+
+    def test_purchase_history_tool_reports_an_empty_history(self):
+        result = self._run("purchase_history", {})
+        self.assertEqual(result["artikel"], [])
+        self.assertIn("noch keine", result["hinweis"])
+        import mcp_tools
+        with self.assertRaises(mcp_tools.ToolInputError):
+            self._run("purchase_history", {"limit": 0})
 
     def test_a_title_may_not_break_the_markdown_task_line(self):
         import mcp_tools

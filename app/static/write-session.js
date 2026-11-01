@@ -719,15 +719,12 @@
 
   function setRecordingButton(recording) {
     recordingButton.classList.toggle('is-recording', recording);
-    recordingButton.classList.toggle('bg-red-600/90', recording);
-    recordingButton.classList.toggle('text-white', recording);
-    recordingButton.classList.toggle('border-red-500', recording);
-    recordingButton.classList.toggle('hover:bg-red-500', recording);
-    recordingButton.classList.toggle('hover:border-red-400', recording);
-    recordingButton.classList.toggle('border-gray-700/50', !recording);
-    recordingButton.classList.toggle('text-gray-300', !recording);
-    recordingButton.classList.toggle('hover:border-gray-600', !recording);
-    recordingButton.classList.toggle('hover:text-white', !recording);
+    ['bg-red-600/90', 'text-white', 'border-red-500', 'hover:bg-red-500', 'hover:border-red-400']
+      .forEach(name => recordingButton.classList.toggle(name, recording));
+    ['border-gray-700/50', 'text-gray-300', 'hover:border-gray-600', 'hover:text-white']
+      .forEach(name => recordingButton.classList.toggle(name, !recording));
+    // Start, Ende und Fehlschlag laufen hier durch: der Player pausiert bzw. wird leiser.
+    document.dispatchEvent(new CustomEvent('journl:recording', { detail: { recording } }));
     recordingTimer.classList.toggle('hidden', !recording);
     recordingTimer.classList.toggle('flex', recording);
     recordingButton.setAttribute('aria-label', recording
@@ -880,9 +877,9 @@
     if (lastSaveError) throw lastSaveError;
     return active?.id || null;
   };
-  window.writeSessionSubmissionBlockReason = function () {
-    return recordingMedia ? 'Eine Sprachnachricht läuft oder wird noch gesichert.' : '';
-  };
+  // Auch die erweiterte Aufnahme (write-voice.js) sperrt, bis ihr Text im Feld steht.
+  window.writeSessionSubmissionBlockReason = () => (recordingMedia
+    ? 'Eine Sprachnachricht läuft oder wird noch gesichert.' : window.journlVoice?.busyReason?.() || '');
   window.markWriteSessionSubmitted = async function () {
     clearTimeout(saveTimer);
     active = null;
@@ -891,12 +888,11 @@
     window.dispatchEvent(new Event('journl:screenshot-inbox-change'));
   };
   window.journlWriteSession = {
-    // Der Bildschirmschoner zeigt den Aufnahmestand in seiner Infozeile, ohne
-    // die Aufnahme-Bedienelemente anzufassen.
+    // Bildschirmschoner liest den Aufnahmestand; write-voice.js meldet MacMini-Transkripte.
+    mediaUpdated: (item) => { const s = currentSession(); if (s) setCurrentSession({ ...s, media: (s.media || []).map(e => (e.id === item.id ? item : e)) }); renderMedia(); },
     isRecording: () => Boolean(recorder && recorder.state !== 'inactive'),
     recordingLabel: () => (recorder && recorder.state !== 'inactive' ? recordingLabel() : ''),
-    recordingSeconds: () => (recorder && recorder.state !== 'inactive'
-      ? Math.max(0, Math.floor((Date.now() - recordingStartedAt) / 1000)) : null),
+    recordingSeconds: () => (recorder && recorder.state !== 'inactive' ? Math.max(0, Math.floor((Date.now() - recordingStartedAt) / 1000)) : null),
     attachInboxItem: async function (uploadId) {
       if (sourceEditMediaBlocked()) throw new Error('Anhänge sind nur in privaten Quellen möglich.');
       const session = await ensureSession();
@@ -907,6 +903,44 @@
       renderMedia();
       field.focus({ preventScroll: true });
       return currentSession();
+    },
+    attachAudioBlob: async function (blob, mimeType, capturedAt, engine) {
+      if (sourceEditMediaBlocked()) throw new Error('Anhänge sind nur in privaten Quellen möglich.');
+      const session = await ensureSession();
+      const media = await jsonRequest(`/api/write-sessions/${encodeURIComponent(session.id)}/audio`, {
+        method: 'POST', body: JSON.stringify({ mime_type: mimeType, captured_at: capturedAt || new Date().toISOString(), ...(engine ? { engine } : {}) })
+      });
+      const response = await window.apiFetch(`/api/write-sessions/media/${encodeURIComponent(media.id)}/chunks/0`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: blob, timeoutMs: 120000
+      });
+      if (!response.ok) throw new Error('Audio konnte nicht gesichert werden.');
+      await jsonRequest(`/api/write-sessions/media/${encodeURIComponent(media.id)}/complete`, {
+        method: 'POST', body: JSON.stringify({ chunk_count: 1 })
+      });
+      setCurrentSession(await jsonRequest(`/api/write-sessions/${encodeURIComponent(session.id)}`, { cache: 'no-store' }));
+      renderMedia();
+      return media.id;
+    },
+    media: (mediaId) => currentSession()?.media?.find(entry => entry.id === mediaId) || null,
+    // Text anhaengen bzw. eine zuvor eingefuegte Passage ersetzen.
+    insertText: function (text) {
+      const value = String(text || '').trim();
+      if (!value) return '';
+      const current = field.value;
+      const separator = !current ? '' : current.endsWith('\n\n') ? '' : current.endsWith('\n') ? '\n' : '\n\n';
+      replaceEditor(current + separator + value);
+      field.focus({ preventScroll: true });
+      return value;
+    },
+    replaceText: function (from, to) {
+      const value = String(to || '').trim();
+      const previous = String(from || '');
+      if (!previous) return window.journlWriteSession.insertText(value);
+      const index = field.value.lastIndexOf(previous);
+      if (index === -1) return window.journlWriteSession.insertText(value);
+      replaceEditor(field.value.slice(0, index) + value + field.value.slice(index + previous.length));
+      field.focus({ preventScroll: true });
+      return value;
     }
   };
   const transcribeButton = document.getElementById('settings-transcribe-now');

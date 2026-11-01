@@ -52,12 +52,24 @@ def _write_json(path, value):
     write_text_file(path, json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
 
+def _default_model():
+    """Ein Modell aus WHISPER_MODEL; eine versehentliche Liste ergibt den ersten Eintrag."""
+    for item in os.environ.get("WHISPER_MODEL", "base").split(","):
+        if MODEL_NAME_RE.fullmatch(item.strip()):
+            return item.strip()
+    return "base"
+
+
+class ServiceUnavailable(RuntimeError):
+    """Der Transkriptionsdienst nimmt gar keine Verbindung an (z. B. noch im Start)."""
+
+
 def _multipart(file_path, model=None):
     boundary = "----journl-" + uuid.uuid4().hex
     parts = []
     def field(name, value):
         parts.extend([f"--{boundary}\r\n".encode(), f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(), str(value).encode(), b"\r\n"])
-    field("model", model or os.environ.get("WHISPER_MODEL", "base"))
+    field("model", model or _default_model())
     field("language", os.environ.get("WHISPER_LANGUAGE", "de"))
     field("response_format", "verbose_json")
     mime = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
@@ -78,8 +90,38 @@ def _call_whisper(file_path, model=None):
         WHISPER_URL + "/v1/audio/transcriptions", data=body, method="POST",
         headers={"Authorization": "Bearer " + WHISPER_API_KEY, "Content-Type": f"multipart/form-data; boundary={boundary}"},
     )
-    with urllib.request.urlopen(request, timeout=21600) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=21600) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError:
+        raise
+    except urllib.error.URLError as exc:
+        # Keine Antwort, keine Verbindung: das ist kein Fehler der Aufnahme.
+        raise ServiceUnavailable(str(exc.reason)) from exc
+
+
+def _call_voice(file_path):
+    """Aufnahmen des Sternchen-Mikrofons (``engine: "voice"``) ueber den lokalen
+    KI-Server (MacMini) statt ueber Whisper - derselbe Anbieter und dasselbe
+    ASR-Modell wie im Schreiben-Tab. Die Originale sind bereits WAV.
+
+    Gelesen wird die rohe config.json; den ``{locale_LLM_IP}``-Platzhalter
+    ersetzt hier die Umgebung, wie es ``main.load_config`` in der App tut.
+    """
+    import voice
+
+    config = voice._raw_config(DATA_DIR / "config.json")
+    local_ip = os.environ.get("locale_LLM_IP", "").strip()
+    for provider in config.get("ai_providers") or []:
+        if isinstance(provider, dict) and local_ip and isinstance(provider.get("api_url"), str):
+            provider["api_url"] = provider["api_url"].replace("{locale_LLM_IP}", local_ip)
+    settings = voice._clean_settings(config.get("voice"))
+    provider = voice.resolve_provider(config, settings["provider_id"])
+    if provider is None:
+        raise RuntimeError("Kein lokaler Voice-Anbieter für Sternchen-Aufnahmen konfiguriert")
+    text = voice.transcribe(file_path, voice.provider_base_url(provider.get("api_url")), settings["asr_model"],
+                            language=os.environ.get("WHISPER_LANGUAGE", "de"))
+    return {"text": text, "engine": "voice", "provider_id": provider.get("id"), "model": settings["asr_model"]}
 
 
 def _apply_to_journal(user_id, item, transcript):
@@ -167,10 +209,12 @@ def run(user_filter=None, model=None, media_filter=None):
             original = _original_path(metadata, current)
             if not original:
                 continue
+            previous_status = current.get("transcription_status")
             current.update(transcription_status="running", transcription_started_at=_now().isoformat(timespec="seconds"))
             _write_json(metadata, current)
             try:
-                transcript = _call_whisper(original, model)
+                # Sternchen-Mikrofon: immer MacMini; altes Mikrofon: Whisper.
+                transcript = _call_voice(original) if current.get("engine") == "voice" else _call_whisper(original, model)
                 transcript_path = _transcript_path(metadata, current)
                 if not transcript_path:
                     raise RuntimeError("Invalid transcript path")
@@ -179,6 +223,16 @@ def run(user_filter=None, model=None, media_filter=None):
                 _write_json(metadata, current)
                 _apply_to_journal(current["user_id"], current, transcript)
                 completed += 1
+            except ServiceUnavailable as exc:
+                # Dienst noch nicht oben (Startwettlauf) oder weg: Aufnahme
+                # unveraendert lassen und den Lauf beenden, statt alle
+                # restlichen als Fehler zu markieren. Der naechste Lauf holt nach.
+                logger.warning("Transcription service unavailable (%s); run stopped, %s stays %s",
+                               exc, current.get("id"), previous_status)
+                current.update(transcription_status=previous_status or "pending")
+                current.pop("transcription_started_at", None)
+                _write_json(metadata, current)
+                return {"completed": completed, "errors": errors, "unavailable": True}
             except Exception as exc:
                 logger.exception("Transcription failed for %s", current.get("id"))
                 current.update(transcription_status="error", transcription_error=str(exc)[:500])

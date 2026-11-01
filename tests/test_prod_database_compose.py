@@ -13,6 +13,13 @@ class ProductionDatabaseComposeTests(unittest.TestCase):
         self.assertNotIn("ports:", postgres)
         self.assertIn("postgres-prod-data:/var/lib/postgresql/data", postgres)
 
+    def test_journal_analysis_scheduler_is_database_profile_only(self):
+        content = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        service = content.split("  journal-analysis-scheduler:\n", 1)[1].split("  whisper-scheduler:\n", 1)[0]
+        self.assertIn('profiles: ["database"]', service)
+        self.assertNotIn("ports:", service)
+        self.assertIn("--loop", service)
+
     def test_existing_app_is_not_forced_to_start_database(self):
         content = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         app = content.split("  journaling-tracker:\n", 1)[1].split("  family-scheduler:", 1)[0]

@@ -548,7 +548,12 @@ def start_audio(session_id):
         return jsonify({"error": "Aktive Session erforderlich"}), 409
     if mime not in write_session_audio.AUDIO_MIMES:
         return jsonify({"error": "Nicht unterstütztes Audioformat"}), 400
-    item, _ = _new_media(data, directory, "audio", mime, payload.get("captured_at"))
+    item, media_dir = _new_media(data, directory, "audio", mime, payload.get("captured_at"))
+    # Herkunft: das Sternchen-Mikrofon (write-voice.js) transkribiert immer ueber
+    # den lokalen Voice-Anbieter; der Whisper-Sidecar laesst solche Aufnahmen aus.
+    if payload.get("engine") == "voice":
+        item["engine"] = "voice"
+        _write_json(media_dir / "metadata.json", item)
     return jsonify(item), 201
 
 
@@ -797,7 +802,12 @@ def media_markdown(items):
         title = _media_title(item.get("title"))
         label_with_title = f"{label}: {title}" if title else label
         lines.extend([f"<!-- jt:media {marker} -->", f"{label_with_title} | Aufnahmezeit: {(_parse_iso(item.get('captured_at')) or _now()).astimezone(_main().get_tz_aware_now()[1]).isoformat(timespec='seconds')}"])
-        if item.get("type") == "audio" and item.get("transcription_status") == "completed" and item.get("transcript_text"):
+        # ``transcript_inline``: die Sternchen-Aufnahme hat denselben Text schon
+        # in den Editor geschrieben - ein zweiter Block verdoppelte den Eintrag.
+        if (
+            item.get("type") == "audio" and item.get("transcription_status") == "completed"
+            and item.get("transcript_text") and not item.get("transcript_inline")
+        ):
             position = audio_ids.index(item.get("id")) + 1 if len(audio_ids) > 1 else None
             lines.extend([
                 transcript_blocks.transcript_marker(item.get("id")),

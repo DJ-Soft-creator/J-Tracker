@@ -57,14 +57,18 @@ INSTRUCTIONS = (
     "welche Hashtags an welchem Tag vorkommen, und ist der Einstieg bei Fragen "
     "nach einem Zeitraum. 'get_blocks' liefert dann die Blöcke zu bestimmten "
     "Hashtags, 'get_day' einen ganzen Tag samt ungetaggter Blöcke und 'search' "
-    "rankt Journaltage per Volltext. Familiendokumente sind hier nicht enthalten."
+    "rankt Journaltage per Volltext. 'semantic_search' findet Stellen nach "
+    "Bedeutung statt Wortlaut (Fragen in Alltagssprache, Umschreibungen), "
+    "'find_similar' verwandte Einträge zu einem Treffer. Familiendokumente sind "
+    "hier nicht enthalten."
 )
 
 FAMILY_INSTRUCTIONS = (
     "Durchsucht ausschließlich die gemeinsamen Familiendokumente der Journl-"
     "Instanz — persönliche Journale sind hier weder sichtbar noch durchsuchbar. "
     "'list_tags' nennt die Hashtags der Familie mit Trefferzahl, 'get_blocks' "
-    "liefert die zugehörigen Abschnitte. Familienzeilen tragen kein Datum, "
+    "liefert die zugehörigen Abschnitte, 'semantic_search' und 'find_similar' "
+    "suchen nach Bedeutung. Familienzeilen tragen kein Datum, "
     "Datumsfilter bleiben deshalb wirkungslos."
 )
 
@@ -76,14 +80,14 @@ AREAS = {
     "personal": {
         "scope": "mcp",
         "sources": ("personal",),
-        "tools": ("list_tags", "list_days", "get_blocks", "get_day", "search"),
+        "tools": ("list_tags", "list_days", "get_blocks", "get_day", "search", "semantic_search", "find_similar"),
         "instructions": INSTRUCTIONS,
         "server_name": "journl",
     },
     "family": {
         "scope": "mcp_family",
         "sources": ("family",),
-        "tools": ("list_tags", "get_blocks"),
+        "tools": ("list_tags", "get_blocks", "semantic_search", "find_similar"),
         "instructions": FAMILY_INSTRUCTIONS,
         "server_name": "journl-family",
     },
@@ -192,6 +196,61 @@ GET_BLOCKS_TOOL = {
     },
 }
 
+_SEMANTIC_LIMIT_SCHEMA = {"type": "integer", "minimum": 1, "maximum": mcp_tools.MAX_SEMANTIC_LIMIT, "default": 10}
+_INCLUDE_SCHEMA = {
+    "type": "array", "items": {"type": "string", "enum": ["journal", "notes", "agent"]}, "minItems": 1,
+    "description": (
+        "Nur im privaten Bereich: Quellen (journal, notes = Projekte/Notizen, agent = Agent- und "
+        "Chatverläufe). Ohne Angabe die Auswahl aus den Einstellungen des Nutzers."
+    ),
+}
+
+SEMANTIC_SEARCH_TOOL = {
+    "name": "semantic_search",
+    "title": "Suche nach Bedeutung",
+    "description": (
+        "Findet Journalstellen nach Bedeutung statt Wortlaut — auch wenn die Frage andere "
+        "Wörter benutzt als der Eintrag (\"wann hatte ich Rückenprobleme\" findet "
+        "\"Bandscheibe zwickt\"). Standard ist hybrid: Wort- und Bedeutungstreffer gemischt. "
+        "Jeder Treffer nennt path und anchor für 'find_similar' sowie match "
+        "(word, semantic, both)."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Frage oder Stichworte in Alltagssprache."},
+            "include": _INCLUDE_SCHEMA,
+            "start_date": _DATE_SCHEMA,
+            "end_date": _DATE_SCHEMA,
+            "mode": {"type": "string", "enum": ["hybrid", "semantic"], "default": "hybrid"},
+            "limit": _SEMANTIC_LIMIT_SCHEMA,
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+}
+
+FIND_SIMILAR_TOOL = {
+    "name": "find_similar",
+    "title": "Ähnliche Einträge",
+    "description": (
+        "Liefert Einträge, die einem bekannten Block inhaltlich ähneln — mit dessen "
+        "gespeichertem Vektor, ohne neue Suche. path und anchor stammen aus einem Treffer "
+        "von 'semantic_search' oder 'get_blocks'."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "anchor": {"type": "string"},
+            "include": _INCLUDE_SCHEMA,
+            "limit": _SEMANTIC_LIMIT_SCHEMA,
+        },
+        "required": ["path", "anchor"],
+        "additionalProperties": False,
+    },
+}
+
 
 def _result(rpc_id, payload, modern):
     body = {"jsonrpc": "2.0", "id": rpc_id, "result": dict(payload)}
@@ -272,6 +331,8 @@ def tools_for(area):
     ]
     if "search" in offered and mcp_tools.search_available():
         tools.append(SEARCH_TOOL)
+    if "semantic_search" in offered and mcp_tools.semantic_available():
+        tools.extend((SEMANTIC_SEARCH_TOOL, FIND_SIMILAR_TOOL))
     return tools
 
 
@@ -294,6 +355,8 @@ def _call_tool(rpc_id, user_id, params, modern, area):
         "list_tags": mcp_tools.run_list_tags,
         "list_days": mcp_tools.run_list_days,
         "get_day": mcp_tools.run_get_day,
+        "semantic_search": mcp_tools.run_semantic_search,
+        "find_similar": mcp_tools.run_find_similar,
     }.get(name) if name in area["tools"] else None
     if runner is None:
         return _error(rpc_id, INVALID_PARAMS, "Unbekanntes Tool: {}".format(name))

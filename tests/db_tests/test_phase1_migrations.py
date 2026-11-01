@@ -49,7 +49,7 @@ class PhaseOneMigrationTests(unittest.TestCase):
             """), {"id": document_id, "path": "phase1/%s.md" % document_id})
         command.upgrade(self._config(), "head")
         with self.engine.connect() as connection:
-            self.assertEqual(connection.scalar(text("SELECT version_num FROM journl_alembic_version")), "0006_agent_prompt")
+            self.assertEqual(connection.scalar(text("SELECT version_num FROM journl_alembic_version")), "0015_analysis_last_days")
             self.assertTrue(connection.scalar(text("SELECT to_regclass('public.documents') IS NOT NULL")))
             self.assertTrue(connection.scalar(text("SELECT to_regclass('public.document_media_references') IS NOT NULL")))
             self.assertEqual(connection.scalar(text("SELECT count(*) FROM documents WHERE id = CAST(:id AS uuid)"), {"id": document_id}), 1)
@@ -91,7 +91,7 @@ class PhaseOneMigrationTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"JOURNL_DB_ENABLED": "true", "JOURNL_DATABASE_URL": DATABASE_URL}, clear=False):
             health = db.database_health()
         self.assertEqual(health, {
-            "enabled": True, "status": "healthy", "schema_revision": "0006_agent_prompt", "healthy": True,
+            "enabled": True, "status": "healthy", "schema_revision": "0015_analysis_last_days", "healthy": True,
         })
 
     def test_enabled_health_reports_unavailable_database_without_exposing_connection_data(self):

@@ -220,10 +220,21 @@ def family_shopping_clean(project_id):
         removed = len(tasks) - len(remaining)
         if not removed:
             return content, {"removed": 0}
+        kept = {id(task) for task in remaining}
+        bought = [task for task in tasks if id(task) not in kept and task.get("completed")]
         project["tasks"] = remaining
-        return serialize_project(project), {"removed": removed}
+        return serialize_project(project), {"removed": removed, "bought": bought,
+                                            "project_id": project.get("id")}
 
     result = update_text_file(path, clean) or {}
+    if result.get("bought"):
+        # Die Kaufhistorie ist Komfort fuer den Agenten - sie darf das
+        # Aufraeumen nie scheitern lassen.
+        try:
+            import shopping_history
+            shopping_history.record(result.get("project_id") or project_id, result["bought"])
+        except Exception:  # noqa: BLE001
+            logger.warning("Kaufhistorie fuer %s nicht geschrieben", project_id, exc_info=True)
     if result.get("forbidden"):
         return jsonify({"error": "Not found"}), 404
     if result.get("not_shopping"):

@@ -603,34 +603,9 @@
     });
   };
 
-  // Der Eintrag im geteilten "⋯"-Menue des Schreiben-Tabs (#write-media-menu,
-  // gebaut von write-session.js). Dasselbe Muster wie write-deep-mode.js: das
-  // Menue gehoert weiter write-session.js, das dort nicht weiter waechst.
-  function addWriteMenuEntry() {
-    const menu = document.getElementById('write-media-menu');
-    if (!menu) {
-      setTimeout(addWriteMenuEntry, 50);
-      return;
-    }
-    if (menu.querySelector('[data-write-agent-entry]')) return;
-    const entry = document.createElement('button');
-    entry.type = 'button';
-    entry.setAttribute('data-write-agent-entry', '');
-    entry.className = 'block w-full px-3 py-2 text-left text-sm text-green-300 hover:bg-green-950/50';
-    entry.textContent = 'Schreib-Agent öffnen';
-    // Über „An Agent senden": beide schicken Text weg, aber nur dieser hier
-    // gibt ihn als Vorschlag zurück, statt eine Sitzung auf dem Host zu starten.
-    const assistant = menu.querySelector('[data-job-action="assistant"]');
-    if (assistant) assistant.insertAdjacentElement('beforebegin', entry);
-    else menu.prepend(entry);
-    entry.addEventListener('click', () => {
-      menu.classList.add('hidden');
-      window.openWriteAgentFromWriteTab();
-    });
-  }
-
-  addWriteMenuEntry();
-
+  // Der Eintrag im geteilten "⋯"-Menue des Schreiben-Tabs entsteht in
+  // agent-lazy.js: das Modul laedt erst beim ersten Aufruf, der Menueeintrag
+  // muss aber schon vorher sichtbar sein.
   window.openWriteAgentFromBrain = async function (docId, fingerprint) {
     try {
       const params = new URLSearchParams({ doc_id: docId, fingerprint: fingerprint || '' });

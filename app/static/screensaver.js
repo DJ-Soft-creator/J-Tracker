@@ -1,6 +1,6 @@
 /* Bildschirmschoner: vollflaechige Diashow als Schreib- und Diktierkulisse.
 
-   Zwei Modi im selben Overlay:
+   Drei Modi im selben Overlay (der Knopf oben rechts wechselt reihum):
 
    * **Diashow** — nur Bilder. Jede Taste, jeder Klick weckt auf, wie man es
      von einem Bildschirmschoner erwartet; zurueck geht es dann ueber den
@@ -10,12 +10,25 @@
    * **Kulisse** — die Bilder bleiben, darueber steht nur das Schreibfeld.
      Getippt wird in eine eigene Textarea, die ihren Wert bei jedem Anschlag in
      `#simple-input` spiegelt; dadurch greifen Entwurfsspeicherung und
-     Absenden unveraendert.
+     Absenden unveraendert. Strg/Cmd+Enter sendet direkt aus der Kulisse.
+     Weil die Pfeiltasten dort dem Schreibfeld gehoeren, blaettern die Pfeile
+     oben rechts (oder die Pfeiltasten, sobald das Schreibfeld keinen Fokus
+     hat).
+   * **Fragen** — Fragen ueber der Bildershow, als Impuls unter dem Schreibfeld
+     oder als Fragen-Session mit eigener Eingabe; Ablauf und Darstellung
+     besitzt screensaver-questions.js.
+
+   Musik spielt screensaver-player.js ausserhalb dieses Overlays; er erfaehrt
+   ueber `journl:screensaver-opened`/`-closed`, ob der Schoner laeuft.
 
    Eine laufende Sprachaufnahme bleibt unberuehrt: `MediaRecorder` haengt nicht
    am sichtbaren DOM, und die Aufnahme-Bedienelemente aus write-session.js
    werden weder entfernt noch neu gerendert. Die Infozeile liest den Stand nur
    ueber `window.journlWriteSession.isRecording()` aus.
+
+   Das Zahnrad legt die Einstellungen ueber den laufenden Schoner, statt ihn
+   zu beenden: Aenderungen wirken so sichtbar sofort, Esc schliesst dann nur
+   das Modal.
 
    Die Bilder kommen ausschliesslich von `/api/screensaver/*`; der Server holt
    und cacht sie. Damit bleibt die CSP bei `img-src 'self'`. */
@@ -33,12 +46,14 @@
     mode: 'screensaver',
     wakeLock: null,
     loading: false,
+    offset: 0,
   };
 
   let root = null;
   let layers = [];
   let infoLine = null;
   let creditLine = null;
+  let detailsLine = null;
   let editor = null;
   let modeButton = null;
   let hintLine = null;
@@ -53,6 +68,9 @@
     style.id = 'screensaver-style';
     style.textContent = `
       @keyframes journl-kenburns { from { transform: scale(1); } to { transform: scale(1.08); } }
+      #screensaver [data-details]:not(.hidden) {
+        display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+      }
       @media (prefers-reduced-motion: reduce) {
         #screensaver [data-layer] { animation: none !important; transition: none !important; }
       }`;
@@ -71,10 +89,14 @@
       <div data-layer class="absolute inset-0 bg-center bg-cover opacity-0 transition-opacity duration-1000"></div>
       <div data-layer class="absolute inset-0 bg-center bg-cover opacity-0 transition-opacity duration-1000"></div>
       <div data-dim class="absolute inset-0 bg-black pointer-events-none" style="opacity:0"></div>
-      <div data-editor-wrap class="absolute inset-0 hidden items-center justify-center px-6 py-16 pointer-events-none">
+      <!-- Auf hellen Bildern reichte ein weicher Schatten nicht: ein dunkler
+           Verlauf hinter der Textmitte plus ein enger Doppelschatten halten die
+           Schrift lesbar, ohne einen Kasten ueber die Kulisse zu legen. -->
+      <div data-editor-wrap class="absolute inset-0 hidden items-center justify-center px-6 py-16 pointer-events-none"
+           style="background:radial-gradient(ellipse 60% 55% at center, rgba(0,0,0,.5), rgba(0,0,0,.2) 60%, transparent 85%)">
         <textarea data-editor rows="10" spellcheck="false" placeholder="Schreiben…"
-          class="pointer-events-auto w-full max-w-3xl max-h-full resize-none bg-transparent text-gray-50 text-lg leading-relaxed focus:outline-none"
-          style="text-shadow:0 2px 12px rgba(0,0,0,.85)"></textarea>
+          class="pointer-events-auto w-full max-w-3xl max-h-full resize-none bg-transparent text-white text-lg leading-relaxed caret-white placeholder:text-white/50 focus:outline-none"
+          style="text-shadow:0 1px 2px rgba(0,0,0,.95), 0 0 6px rgba(0,0,0,.8), 0 2px 16px rgba(0,0,0,.7)"></textarea>
       </div>
       <!-- Ein gemeinsamer Stapel: Infozeile und Lizenznachweis koennen beide
            sichtbar sein (etwa bei "Nur Uhrzeit"), duerfen sich dann aber nicht
@@ -83,10 +105,19 @@
            Kontrast liefert der doppelte Schatten, kein Kasten. -->
       <div class="absolute bottom-4 left-5 max-w-[70%] flex flex-col gap-0.5 pointer-events-none"
            style="text-shadow:0 1px 3px rgba(0,0,0,.95), 0 2px 12px rgba(0,0,0,.85)">
+        <div data-details class="hidden max-w-xl text-sm text-white/80 leading-snug"></div>
         <div data-info class="text-sm text-white/85 leading-snug"></div>
         <div data-credit class="text-xs text-white/60 leading-snug hidden"></div>
       </div>
       <div class="absolute top-4 right-4 flex items-center gap-1">
+        <button type="button" data-prev aria-label="Vorheriges Bild" title="Vorheriges Bild"
+                class="rounded-lg p-2 text-white/25 hover:text-white/80 hover:bg-white/10 transition">
+          <svg viewBox="0 0 24 24" class="h-5 w-5 pointer-events-none" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>
+        </button>
+        <button type="button" data-next aria-label="Nächstes Bild" title="Nächstes Bild"
+                class="rounded-lg p-2 text-white/25 hover:text-white/80 hover:bg-white/10 transition">
+          <svg viewBox="0 0 24 24" class="h-5 w-5 pointer-events-none" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
         <button type="button" data-settings aria-label="Einstellungen" title="Einstellungen"
                 class="rounded-lg p-2 text-white/25 hover:text-white/80 hover:bg-white/10 transition">
           <svg viewBox="0 0 24 24" class="h-5 w-5 pointer-events-none" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.9 19.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 15.9H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9.2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1.3Z"/></svg>
@@ -105,16 +136,16 @@
     layers = Array.from(root.querySelectorAll('[data-layer]'));
     infoLine = root.querySelector('[data-info]');
     creditLine = root.querySelector('[data-credit]');
+    detailsLine = root.querySelector('[data-details]');
     editor = root.querySelector('[data-editor]');
     modeButton = root.querySelector('[data-mode]');
     hintLine = root.querySelector('[data-hint]');
 
     root.querySelector('[data-close]').addEventListener('click', () => close({ resume: false }));
-    modeButton.addEventListener('click', () => setMode(state.mode === 'focus' ? 'screensaver' : 'focus'));
-    root.querySelector('[data-settings]').addEventListener('click', () => {
-      close({ resume: false });
-      window.openSettingsGroup?.('screensaver', 'Bildschirmschoner');
-    });
+    modeButton.addEventListener('click', () => setMode(NEXT_MODE[state.mode] || 'screensaver'));
+    root.querySelector('[data-prev]').addEventListener('click', () => step(-1));
+    root.querySelector('[data-next]').addEventListener('click', () => step(1));
+    root.querySelector('[data-settings]').addEventListener('click', () => openSettingsAbove());
     // Nur der Kulissen-Modus haelt Eingaben fest; sonst weckt jeder Anschlag auf.
     editor.addEventListener('input', () => {
       const target = field();
@@ -122,8 +153,10 @@
       target.value = editor.value;
       target.dispatchEvent(new Event('input', { bubbles: true }));
     });
+    // Bedienelemente anderer Module (der Preset-Umschalter) markieren sich
+    // mit data-screensaver-keep, damit ein Klick hinein nicht aufweckt.
     root.addEventListener('pointerdown', (event) => {
-      if (state.mode === 'focus' || event.target.closest('button') || event.target === editor) return;
+      if (state.mode !== 'screensaver' || event.target.closest('button, [data-screensaver-keep]') || event.target === editor) return;
       close();
     });
     return root;
@@ -145,22 +178,56 @@
 
   // Die Einstellungsmaske meldet Aenderungen, damit ein offener Schoner sie
   // sofort uebernimmt statt erst beim naechsten Start.
+  // Eine geaenderte Quellenauswahl oder Reihenfolge verwirft die geladene
+  // Liste: sonst kamen abgewaehlte Ordner weiter, bis die alten zwoelf Bilder
+  // (plus Nachgeladenes) durch waren - und nach dem Schliessen sogar wieder.
+  function playlistKey(settings) {
+    return JSON.stringify([settings?.sources || [], settings?.order || 'shuffle']);
+  }
   document.addEventListener('journl:screensaver-settings', (event) => {
+    const changed = playlistKey(state.settings) !== playlistKey(event.detail);
     state.settings = event.detail || null;
+    if (changed) {
+      state.items = [];
+      state.index = -1;
+      state.offset = 0;
+    }
     if (!state.open) return;
     applyLook();
+    if (changed) loadPlaylist(true).then(() => { if (state.open) advance(); });
+    else renderInfo();
     schedule();
   });
 
   // ─── Bilder ───────────────────────────────────────────────────────
 
+  // Bildquelle „Keine Bilder“: schwarzer Grund, nur das Klangbild darauf.
+  function imageless() {
+    const sources = state.settings?.sources || [];
+    return sources.length === 1 && sources[0] === 'none';
+  }
+
+  function clearImages() {
+    state.items = [];
+    state.index = -1;
+    layers.forEach((layer) => { layer.style.opacity = '0'; layer.style.backgroundImage = ''; });
+    renderInfo({});
+    document.dispatchEvent(new CustomEvent('journl:screensaver-image', { detail: { src: '' } }));
+  }
+
   async function loadPlaylist(replace) {
-    if (state.loading) return;
+    if (imageless()) { clearImages(); return; }
+    if (state.loading && !replace) return;
+    const key = playlistKey(state.settings);
     state.loading = true;
     try {
-      const response = await window.apiFetch('/api/screensaver/playlist?count=12', { cache: 'no-store' });
+      // „Der Reihe nach“ blaettert serverseitig weiter; offset sagt, wo.
+      const response = await window.apiFetch(`/api/screensaver/playlist?count=12&offset=${state.offset || 0}`, { cache: 'no-store' });
       const data = await response.json();
+      // Eine Antwort fuer eine inzwischen geaenderte Auswahl wird verworfen.
+      if (key !== playlistKey(state.settings)) return;
       const items = Array.isArray(data.items) ? data.items : [];
+      state.offset = Number.isFinite(data.next_offset) ? data.next_offset : 0;
       if (!items.length) {
         if (replace) showMessage(data.error || 'Keine Bilder gefunden.');
         return;
@@ -210,6 +277,14 @@
     show(state.items[state.index]);
   }
 
+  // Manuelles Blaettern startet den Takt neu, sonst folgt das naechste
+  // automatische Bild womoeglich Sekunden spaeter.
+  function step(direction) {
+    if (direction < 0) rewind();
+    else advance();
+    schedule();
+  }
+
   function show(item) {
     if (!item) return;
     const next = layers[state.layer];
@@ -226,6 +301,8 @@
     current.style.opacity = '0';
     state.layer = 1 - state.layer;
     renderInfo(item);
+    // Die Lichteffekte des Players nehmen die Farbe des Bildes auf.
+    document.dispatchEvent(new CustomEvent('journl:screensaver-image', { detail: { src: item.src } }));
   }
 
   // ─── Infozeile ────────────────────────────────────────────────────
@@ -280,6 +357,12 @@
     const needsCredit = mode !== 'full' && mode !== 'image' && current.license && current.author;
     creditLine.textContent = needsCredit ? credit(current) : '';
     creditLine.classList.toggle('hidden', !needsCredit);
+
+    // „Mehr über das Bild“: Beschreibung und Datum ueber der Infozeile.
+    const details = state.settings?.details
+      ? [current.date, current.description].filter(Boolean).join('  ·  ') : '';
+    detailsLine.textContent = details;
+    detailsLine.classList.toggle('hidden', !details);
   }
 
   function fadeSeconds() {
@@ -304,14 +387,58 @@
     return parts.join('  ·  ');
   }
 
-  function setMode(mode) {
-    state.mode = mode === 'focus' ? 'focus' : 'screensaver';
-    const focus = state.mode === 'focus';
-    root.querySelector('[data-editor-wrap]').classList.toggle('hidden', !focus);
-    root.querySelector('[data-editor-wrap]').classList.toggle('flex', focus);
-    modeButton.textContent = focus ? 'Diashow' : 'Kulisse';
-    hintLine.textContent = focus ? 'Esc beendet' : hintText();
-    if (focus) {
+  function focusHint() {
+    const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+    return `${mac ? '⌘' : 'Strg'}+Enter sendet  ·  Esc beendet`;
+  }
+
+  let hintTimer = null;
+  function flashHint(text, sticky) {
+    clearTimeout(hintTimer);
+    hintLine.textContent = text;
+    if (!sticky) hintTimer = setTimeout(() => { hintLine.textContent = state.mode === 'focus' ? focusHint() : hintText(); }, 3500);
+  }
+
+  // Strg/Cmd+Enter sendet auch aus der Kulisse - ueber denselben Weg wie das
+  // Schreibfeld. Der Toast liegt unter dem Overlay; seine Meldung erscheint
+  // deshalb in der Hinweiszeile.
+  let submitting = false;
+  async function submitFromFocus() {
+    if (submitting || typeof window.handleSubmit !== 'function') return;
+    const target = field();
+    if (target) target.value = editor.value;
+    submitting = true;
+    const showToast = window.showToast;
+    let message = '';
+    window.showToast = (text, isError) => {
+      message = String(text || '');
+      return showToast?.(text, isError);
+    };
+    flashHint('Wird gesendet…', true);
+    try {
+      await window.handleSubmit();
+    } catch (error) {
+      message = error?.message || 'Senden fehlgeschlagen';
+    } finally {
+      window.showToast = showToast;
+      submitting = false;
+    }
+    // Nach dem Senden leert die App das Schreibfeld (oder behaelt waehrenddessen
+    // neu Getipptes) - die Kulisse uebernimmt genau diesen Stand.
+    editor.value = field()?.value || '';
+    flashHint(message || 'Gesendet');
+    editor.focus({ preventScroll: true });
+  }
+
+  // Der Knopf oben rechts nennt den naechsten Modus: Diashow → Kulisse → Fragen.
+  const MODE_LABELS = { screensaver: 'Diashow', focus: 'Kulisse', questions: 'Fragen' };
+  const NEXT_MODE = { screensaver: 'focus', focus: 'questions', questions: 'screensaver' };
+
+  function showEditor(visible) {
+    const wrap = root.querySelector('[data-editor-wrap]');
+    wrap.classList.toggle('hidden', !visible);
+    wrap.classList.toggle('flex', visible);
+    if (visible) {
       editor.value = field()?.value || '';
       editor.focus({ preventScroll: true });
     } else {
@@ -319,29 +446,106 @@
     }
   }
 
+  function setMode(mode) {
+    const previous = state.mode;
+    state.mode = MODE_LABELS[mode] ? mode : 'screensaver';
+    if (previous === 'questions') window.journlScreensaverQuestions?.stop();
+    // Im Fragen-Modus entscheidet screensaver-questions.js ueber das Schreibfeld
+    // (Impuls: sichtbar, Fragen-Session: eigene Eingabe).
+    showEditor(state.mode === 'focus');
+    // Das Klangbild liegt je nach Modus ueber oder unter der Abdunklung.
+    document.dispatchEvent(new CustomEvent('journl:screensaver-mode', { detail: { mode: state.mode } }));
+    modeButton.textContent = MODE_LABELS[NEXT_MODE[state.mode]];
+    hintLine.textContent = state.mode === 'screensaver' ? hintText() : focusHint();
+    if (state.mode === 'questions') {
+      window.journlScreensaverQuestions?.start({ root, editor, field, showEditor, setMode });
+    }
+  }
+
+  // ─── Einstellungen ueber dem Schoner ──────────────────────────────
+
+  /* Das Modal liegt normalerweise unter dem Overlay (z-50 gegen z-[120]).
+     Fuer die Dauer des Besuchs hebt es ein Inline-Stil darueber und hellt den
+     Hintergrund auf, damit die Diashow sichtbar weiterlaeuft; beim Schliessen
+     faellt beides wieder weg. */
+  function settingsModal() { return document.getElementById('settings-modal'); }
+  function settingsOpen() {
+    const modal = settingsModal();
+    return Boolean(state.open && modal && !modal.classList.contains('hidden'));
+  }
+
+  let settingsWatch = null;
+  function openSettingsAbove(group = 'screensaver', label = 'Bildschirmschoner') {
+    const modal = settingsModal();
+    if (!modal || typeof window.openSettingsGroup !== 'function') return;
+    modal.style.zIndex = '130';
+    modal.style.backgroundColor = 'rgba(0,0,0,.15)';
+    window.openSettingsGroup(group, label);
+    settingsWatch?.disconnect();
+    settingsWatch = new MutationObserver(() => {
+      if (!modal.classList.contains('hidden')) return;
+      settingsWatch.disconnect();
+      settingsWatch = null;
+      modal.style.zIndex = '';
+      modal.style.backgroundColor = '';
+      if (state.open && state.mode !== 'screensaver') editor.focus({ preventScroll: true });
+    });
+    settingsWatch.observe(modal, { attributes: true, attributeFilter: ['class'] });
+  }
+
   // ─── Tastatur ─────────────────────────────────────────────────────
+
+  function isTyping(target) {
+    return target instanceof HTMLTextAreaElement
+      || (target instanceof HTMLInputElement && !['button', 'checkbox', 'radio', 'range'].includes(target.type))
+      || Boolean(target?.isContentEditable);
+  }
 
   function onKeydown(event) {
     if (!state.open) return;
+    // Liegen die Einstellungen obenauf, gehoeren ihnen die Tasten; Esc
+    // schliesst dann nur das Modal, der Schoner laeuft weiter.
+    if (settingsOpen()) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      window.closeSettings?.();
+      return;
+    }
     if (event.key === 'Escape') {
       event.preventDefault();
       close({ resume: false });
       return;
     }
-    if (state.mode === 'focus') return;
+    // Player-Kuerzel und Strg/Cmd+Alt+1-9 (Preset) wecken die Diashow nicht.
+    if (window.journlScreensaverPlayer?.handleKey(event)) return;
+    if (window.journlScreensaverVisual?.handleKey(event)) return;
+    if (window.journlScreensaverPresets?.handleKey(event)) return;
+    if (state.mode === 'questions' && window.journlScreensaverQuestions?.handleKey(event)) return;
+    if (state.mode !== 'screensaver') {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault();
+        submitFromFocus();
+        return;
+      }
+      // Ohne Fokus im Schreibfeld blaettern die Pfeiltasten auch hier.
+      const plain = !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+      if (plain && !isTyping(event.target) && (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) {
+        event.preventDefault();
+        step(event.key === 'ArrowLeft' ? -1 : 1);
+      }
+      return;
+    }
     // Reine Modifikatoren wecken nicht auf - sonst beendet schon das Greifen
     // nach einer Tastenkombination die Diashow.
     if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab'].includes(event.key)) return;
     if (event.key === 'ArrowRight' || event.key === ' ') {
       event.preventDefault();
-      advance();
-      schedule();
+      step(1);
       return;
     }
     if (event.key === 'ArrowLeft') {
       event.preventDefault();
-      rewind();
-      schedule();
+      step(-1);
       return;
     }
     close();
@@ -364,15 +568,22 @@
   async function open(mode) {
     build();
     const config = await settings();
+    const wasOpen = state.open;
     state.open = true;
-    state.mode = mode || config.mode || 'screensaver';
+    // Bei schon offenem Schoner ("Jetzt starten" in den Einstellungen) muss
+    // setMode den alten Modus noch kennen, sonst laeuft etwa die Fragen-Runde
+    // unsichtbar weiter.
+    const next = mode || config.mode || 'screensaver';
+    if (!wasOpen) state.mode = next;
     root.classList.remove('hidden');
+    if (!wasOpen) document.dispatchEvent(new CustomEvent('journl:screensaver-opened', { detail: { root, settings: config } }));
     applyLook();
-    setMode(state.mode);
+    setMode(next);
     document.addEventListener('keydown', onKeydown, true);
-    acquireWakeLock();
+    if (!wasOpen) acquireWakeLock();
     if (!state.items.length) await loadPlaylist(true);
     if (state.index < 0) advance();
+    else if (imageless()) clearImages();
     else renderInfo();
     schedule();
     clearInterval(state.clock);
@@ -393,8 +604,11 @@
     root.classList.add('hidden');
     state.wakeLock?.release?.().catch(() => {});
     state.wakeLock = null;
-    if (state.mode === 'focus' && field()) field().value = editor.value;
+    if (state.mode === 'questions') window.journlScreensaverQuestions?.stop();
+    if (state.mode !== 'screensaver' && field()) field().value = editor.value;
     resumeButton()?.classList.toggle('hidden', !resume);
+    // Der Player entscheidet daran, ob er (bei „nur im Schoner“) pausiert.
+    document.dispatchEvent(new CustomEvent('journl:screensaver-closed'));
     // Zurueck im Schreibfeld, damit der naechste Anschlag wieder ankommt.
     const target = field();
     if (target && !document.getElementById('tab-write')?.classList.contains('hidden')) {
@@ -429,5 +643,12 @@
     open('');
   });
 
-  window.journlScreensaver = { open, close, isOpen: () => state.open };
+  window.journlScreensaver = {
+    open, close, isOpen: () => state.open,
+    // Fuer Presets im laufenden Schoner: Modus wechseln, kurz Bescheid geben.
+    setMode: (mode) => { if (state.open) setMode(mode); },
+    flashHint: (text) => { if (state.open) flashHint(text); },
+    // Fuer den Player: seine Einstellungen ueber dem laufenden Schoner.
+    openSettings: (group, label) => { if (state.open) openSettingsAbove(group, label); },
+  };
 }());

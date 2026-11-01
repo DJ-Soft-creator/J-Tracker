@@ -64,6 +64,13 @@ function brainManageButton(docId, label) {
 }
 
 
+// Alle Hashtags eines Treffers - eigene, KI-vergebene und die aus dem Text -
+// in einem Dialog (brain-tag-editor.js).
+function brainTagEditorButton(docId, fingerprint) {
+  return `<button type="button" data-brain-tag-editor data-doc-id="${escapeHtmlAttr(docId)}" data-fingerprint="${escapeHtmlAttr(fingerprint)}" data-menu-label="Alle Hashtags bearbeiten" class="text-green-500 hover:text-green-400 transition text-xs" title="Alle Hashtags bearbeiten" aria-label="Alle Hashtags bearbeiten">${window.journlIcon?.('tag', 'h-4 w-4') || ''}</button>`;
+}
+
+
 // Kartenaktionen liegen hinter dem gemeinsamen "⋯"-Menü; eine einzelne Aktion
 // bleibt als Icon stehen (siehe action-menu.js).
 function brainActionMenu(parts, label = 'Aktionen') {
@@ -177,6 +184,9 @@ function bindBrainCardActions(container) {
       window.journlBuckets.assignBrain(button.dataset.docId, fingerprint, item?.path || '', text);
     });
   });
+  container.querySelectorAll('[data-brain-similar]').forEach((button) => {
+    button.addEventListener('click', () => brainSemanticSimilar(button.dataset.docId, button.dataset.fingerprint || ''));
+  });
   container.querySelectorAll('[data-brain-manage]').forEach((button) => {
     button.addEventListener('click', () => openBrainAccessManagerForDocument(button.dataset.docId));
   });
@@ -234,19 +244,22 @@ function renderBrainResults(results, pagination = {}) {
         ${checkbox}
         <div class="min-w-0 flex flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
           <span class="border rounded-full px-2 py-0.5 ${brainSourceClass(item.source)}">${escapeHtml(item.source_label)}</span>
+          ${item.origin && typeof brainOriginBadge === 'function' ? brainOriginBadge(item.origin) : ''}
           <span class="break-all font-mono text-gray-600">${escapeHtml(filename)}</span>
-          ${tags}
+          <span data-brain-card-tags class="contents">${tags}</span>
           ${item.read_only ? '<span class="text-amber-400">nur lesen</span>' : ''}
         </div>
         <div class="flex shrink-0 items-center justify-end">
           ${brainActionMenu([
             item.management?.can_manage ? brainManageButton(item.doc_id, item.path.startsWith('projects/') ? 'Projekt' : 'Notiz') : '',
             item.db_journal ? '' : `<button type="button" data-brain-metadata data-reference-type="block" data-doc-id="${escapeHtmlAttr(item.doc_id)}" data-fingerprint="${escapeHtmlAttr(item.fingerprint)}" class="text-xs text-gray-500 hover:text-white">Tags bearbeiten</button>`,
+            item.db_journal ? '' : brainTagEditorButton(item.doc_id, item.fingerprint),
             item.truncated && !item.db_journal
               ? brainExpandButton(item.doc_id, item.fingerprint, brainState.expanded.has(item.fingerprint)) : '',
             item.read_only ? '' : brainEditButton(item.doc_id, item.fingerprint),
             brainAssistantButton(item.doc_id, item.fingerprint),
             brainWriteAgentButton(item.doc_id, item.fingerprint),
+            typeof brainSimilarButton === 'function' ? brainSimilarButton(item) : '',
             item.db_journal ? '' : brainBucketButton(item.doc_id, item.fingerprint),
           ])}
         </div>
@@ -260,6 +273,9 @@ function renderBrainResults(results, pagination = {}) {
     button.addEventListener('click', () => editBrainMetadata(
       button.dataset.referenceType, button.dataset.docId, button.dataset.fingerprint,
     ));
+  });
+  container.querySelectorAll('[data-brain-tag-editor]').forEach((button) => {
+    button.addEventListener('click', () => window.openBrainTagEditor?.(button.dataset.docId, button.dataset.fingerprint));
   });
   container.querySelector('[data-brain-load-more]')?.addEventListener('click', loadMoreBrainResults);
   container.querySelectorAll('[data-brain-select]').forEach((box) => {

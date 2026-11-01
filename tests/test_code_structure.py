@@ -28,17 +28,17 @@ class CodeStructureTests(unittest.TestCase):
         expected = {
             "index.html": (
                 "action-menu.js", "write-submit-state.js","mobile-app-core.js", "mobile-session.js", "dashboard-days.js", "mobile-pwa-gestures.js",
-                "mobile-app-features.js", "settings-menu.js", "template-manager.js", "write-targets.js", "family-board.js", "brain.js", "brain-cards.js", "brain-tag-filters.js", "brain-select.js", "brain-content.js", "brain-replace.js",
+                "mobile-app-features.js", "settings-menu.js", "template-manager.js", "write-targets.js", "family-board.js", "brain.js", "brain-cards.js", "brain-tag-filters.js", "brain-select.js", "brain-content.js", "brain-tag-editor.js", "brain-replace.js",
                 "write-history.js", "write-hashtags.js", "write-template-hashtags.js",
                 "write-ai.js", "whisper-model.js", "journal-media.js", "write-media-strip.js", "write-media-menu.js", "write-session.js", "transcription-schedule.js", "write-deep-mode.js", "write-read-mode.js", "screenshot-inbox.js", "share-api.js",
-                "write-source-edit.js", "write-agent.js", "agent-project-pickers.js", "agent-projects.js",
+                "write-source-edit.js", "write-agent.js", "agent-lazy.js", "agent-project-pickers.js", "agent-projects.js",
             ),
             "desktop.html": (
                 "action-menu.js", "write-submit-state.js","desktop-app-core.js", "dashboard-days.js", "desktop-app-features.js",
-                "settings-menu.js", "template-manager.js", "desktop-app-resize.js", "write-targets.js", "family-board.js", "brain.js", "brain-cards.js", "brain-tag-filters.js", "brain-select.js", "brain-content.js", "brain-replace.js",
+                "settings-menu.js", "template-manager.js", "desktop-app-resize.js", "write-targets.js", "family-board.js", "brain.js", "brain-cards.js", "brain-tag-filters.js", "brain-select.js", "brain-content.js", "brain-tag-editor.js", "brain-replace.js",
                 "write-history.js", "write-hashtags.js", "write-template-hashtags.js",
                 "write-ai.js", "whisper-model.js", "journal-media.js", "write-media-strip.js", "write-media-menu.js", "write-session.js", "transcription-schedule.js", "write-deep-mode.js", "write-read-mode.js", "screenshot-inbox.js", "share-api.js",
-                "write-source-edit.js", "write-agent.js", "agent-project-pickers.js", "agent-projects.js",
+                "write-source-edit.js", "write-agent.js", "agent-lazy.js", "agent-project-pickers.js", "agent-projects.js",
             ),
         }
         for template_name, assets in expected.items():
@@ -79,6 +79,11 @@ class DocumentationLinkTests(unittest.TestCase):
         for path in ROOT.rglob("*.md"):
             parts = path.parts
             if ".git" in parts or "node_modules" in parts or "fixtures" in parts:
+                continue
+            # Agenten-Worktrees (.claude/worktrees/<name>) sind vollstaendige
+            # Repo-Kopien samt archive/ - sie doppelt zu pruefen meldet deren
+            # Altnamen als Fehler dieses Arbeitsverzeichnisses.
+            if ".claude" in parts and "worktrees" in parts:
                 continue
             # Eingereichte Tickets sind Nutzerinhalt, keine Projektdokumentation:
             # sie sind gitignored, werden von der App geschrieben (Modus 0o660,

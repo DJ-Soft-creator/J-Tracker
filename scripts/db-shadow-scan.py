@@ -22,6 +22,11 @@ from shadow_index import inventory, reconcile, report, shadow_import  # noqa: E4
 REPORT_RETENTION_DAYS = 30
 
 
+def _storage_prefix():
+    """Root-Key-Prefix: PROD-Spiegel nutzt 'prod-user', DEV bleibt bei 'dev-user'."""
+    return os.environ.get("JOURNL_DB_STORAGE_PREFIX", "dev-user").strip()
+
+
 def _write_report(directory, payload):
     directory.mkdir(parents=True, exist_ok=True)
     cutoff = datetime.now(timezone.utc) - timedelta(days=REPORT_RETENTION_DAYS)
@@ -46,7 +51,7 @@ def scan_once(data_dir):
     try:
         per_root = []
         for root in roots:
-            key = "dev-user-" + root.name
+            key = _storage_prefix() + "-" + root.name
             items = inventory(root)
             with engine.begin() as connection:
                 before = reconcile(connection, storage_root_key=key, items=items)

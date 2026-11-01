@@ -146,3 +146,7 @@ _install_domain_module(_brain_diagnostics)
 import brain_routes as _brain_routes
 for _export_name in _brain_routes.__all__:
     globals()[_export_name] = getattr(_brain_routes, _export_name)
+
+import brain_tag_map_routes as _brain_tag_map_routes
+for _export_name in _brain_tag_map_routes.__all__:
+    globals()[_export_name] = getattr(_brain_tag_map_routes, _export_name)

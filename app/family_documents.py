@@ -130,6 +130,17 @@ def build_board(user):
     own_bucket_id = personal.get("id")
     linked = family_views.collect_assigned_tasks(documents, user_id, own_bucket_id)
     unassigned = family_views.collect_unassigned_tasks(documents, user_id)
+    recently_completed = [
+        {
+            "id": task.get("id"),
+            "title": task.get("title") or "",
+            "origin_id": task.get("origin_id"),
+            "origin_title": task.get("origin_title") or "",
+            "completed_at": task.get("completed_at"),
+            "completed_by_display": _user_display(task.get("completed_by")),
+        }
+        for task in family_views.collect_recently_completed(documents, user_id)
+    ]
 
     personal_view = _sanitize_project(
         family_views.build_personal_view(personal, linked, _user_display(user_id))
@@ -161,6 +172,7 @@ def build_board(user):
         "notizen": scopes[family_views.SCOPE_BY_TYPE[family_views.TYPE_NOTE]],
         "personal": personal_view,
         "unassigned": unassigned_view,
+        "recently_completed": recently_completed,
         "is_admin": family_views.is_admin(user),
         "users": [
             {"id": item.get("id"), "display": item.get("username") or item.get("id")}

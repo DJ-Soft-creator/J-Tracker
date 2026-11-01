@@ -157,6 +157,61 @@ class RestartTests(BackgroundRunCase):
         self.assertIsNone(background_runs.active("user-a", "test_restart"))
 
 
+class InlineAndHookTests(BackgroundRunCase):
+    def tearDown(self):
+        for kind in self._registered:
+            background_runs._finish_hooks.pop(kind, None)
+            background_runs._retention.pop(kind, None)
+        super().tearDown()
+
+    def test_an_inline_run_finishes_before_start_returns_and_calls_its_hook(self):
+        """So startet ein Sidecar ohne eigenen Arbeiter einen Lauf ins Protokoll."""
+        finished = []
+        background_runs.register("test_inline", lambda handle, params: {"n": 1},
+                                 on_finish=finished.append)
+        self._registered.append("test_inline")
+
+        record = background_runs.start("user-a", "test_inline", {}, trigger="schedule", inline=True)
+
+        self.assertEqual((record["status"], record["trigger"], record["result"]), ("done", "schedule", {"n": 1}))
+        self.assertEqual([item["id"] for item in finished], [record["id"]])
+        self.assertEqual(background_runs.public_run(record)["trigger"], "schedule")
+
+    def test_the_hook_also_hears_about_a_failure(self):
+        finished = []
+
+        def broken(handle, params):
+            raise background_runs.RunError("weg")
+
+        background_runs.register("test_inline_fail", broken, on_finish=finished.append)
+        self._registered.append("test_inline_fail")
+        record = background_runs.start("user-a", "test_inline_fail", {}, inline=True)
+
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(finished[0]["error"], "weg")
+
+    def test_an_app_restart_leaves_a_sidecar_run_alone(self):
+        background_runs.register("test_inline_keep", lambda handle, params: {})
+        self._registered.append("test_inline_keep")
+        record = background_runs.start("user-a", "test_inline_keep", {}, inline=True)
+        background_runs._modify("user-a", record["id"], lambda item: item.update({"status": "running"}))
+
+        self.assertEqual(background_runs.abort_stale_runs(), 0)
+        self.assertEqual(background_runs.abort_stale_runs(runner="inline"), 1)
+
+    def test_a_kind_can_keep_its_runs_longer(self):
+        from datetime import datetime, timedelta, timezone
+
+        background_runs.register("test_keep", lambda handle, params: {}, retention_days=30)
+        self._registered.append("test_keep")
+        record = background_runs.start("user-a", "test_keep", {}, inline=True)
+        later = datetime.now(timezone.utc) + timedelta(days=10)
+
+        self.assertEqual(background_runs.cleanup("user-a", now=later), 0)
+        self.assertEqual(background_runs.cleanup("user-a", now=later + timedelta(days=25)), 1)
+        self.assertIsNone(background_runs.read("user-a", record["id"]))
+
+
 class PublicViewTests(BackgroundRunCase):
     def test_the_log_is_delivered_from_the_position_the_browser_already_has(self):
         record = {
@@ -183,7 +238,9 @@ class PublicViewTests(BackgroundRunCase):
         self._register("test_view", lambda handle, params: {})
         record = background_runs.start("user-a", "test_view", {"provider_id": "lm_secret"})
         self._await_final(record["id"])
-        self.assertNotIn("params", background_runs.public_run(background_runs.read("user-a", record["id"])))
+        view = background_runs.public_run(background_runs.read("user-a", record["id"]))
+        self.assertNotIn("params", view)
+        self.assertNotIn("lm_secret", str(view))
 
 
 class RunApiTests(BackgroundRunCase):

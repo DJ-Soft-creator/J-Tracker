@@ -19,15 +19,8 @@ import urllib.error
 from datetime import datetime, timezone, timedelta
 from pathlib import Path, PurePosixPath
 
-from flask import (
-    Flask,
-    render_template,
-    request,
-    jsonify,
-    session,
-    make_response,
-    request as flask_request,
-)
+from flask import (Flask, render_template, request, jsonify, session, make_response,
+                   request as flask_request)
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import asset_delivery
@@ -51,8 +44,16 @@ from tickets import tickets_bp
 from agent_workbench import worker_bp
 from buckets import buckets_bp
 from screensaver import screensaver_bp
+from screensaver_questions import questions_bp as screensaver_questions_bp
+from screensaver_presets import presets_bp as screensaver_presets_bp
+from screensaver_player import player_bp as screensaver_player_bp
 import background_runs
 from background_runs_routes import background_runs_bp
+import journal_analysis as journal_analysis_module  # noqa: F401
+import journal_analysis_manual as journal_analysis_manual_module  # noqa: F401  (registers the run handler)
+from journal_analysis_routes import journal_analysis_bp
+from voice_routes import voice_bp
+from pushover_routes import pushover_bp
 import tagging as tagging_module
 from scheduling import update_text_file, write_text_file, read_text_file
 from db import agent_jobs_enabled, database_health, database_url, is_enabled
@@ -80,7 +81,13 @@ app.register_blueprint(tickets_bp)
 app.register_blueprint(worker_bp)
 app.register_blueprint(buckets_bp)
 app.register_blueprint(screensaver_bp)
+app.register_blueprint(screensaver_questions_bp)
+app.register_blueprint(screensaver_presets_bp)
+app.register_blueprint(screensaver_player_bp)
 app.register_blueprint(background_runs_bp)
+app.register_blueprint(journal_analysis_bp)
+app.register_blueprint(voice_bp)
+app.register_blueprint(pushover_bp)
 
 
 class JournalWriteConflict(RuntimeError):
@@ -120,11 +127,15 @@ def set_security_headers(response):
     """Set security headers on every response."""
     # Seit Tailwind als fertiges Stylesheet aus /static kommt, laedt die App
     # nichts mehr von fremden Hosts - die CSP bleibt entsprechend bei 'self'.
+    # media-src erlaubt blob:, weil das Vorlesen das TTS-Audio als Blob im
+    # Player abspielt; ohne die Angabe galt default-src und der Browser
+    # verweigerte die Wiedergabe („kann der Browser nicht abspielen“).
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
+        "media-src 'self' blob:; "
         "font-src 'self';"
     )
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -146,11 +157,19 @@ def inject_env():
     """Make the development-stage flags available in all templates.
 
     ``DB_SEARCH_ENABLED`` spiegelt genau die Bedingung von
-    ``/api/journal-search``: ohne sie stand der Knopf "Journal DB" auch in PROD
-    in der Leiste und beantwortete jeden Klick mit "Journalsuche ist nicht
-    aktiv".
+    ``/api/journal-search``: der Knopf "Journal DB" erscheint nur, wenn ein
+    aktiver Suchindex antworten kann — sonst beantwortete er jeden Klick mit
+    "Journalsuche ist nicht aktiv".
     """
-    return {"IS_DEV": IS_DEV, "DB_SEARCH_ENABLED": IS_DEV and is_enabled()}
+    return {
+        "IS_DEV": IS_DEV,
+        "DB_SEARCH_ENABLED": is_enabled(),
+        # Cache-Buster fuer den Service Worker: die Registrierung haengt die
+        # Version an /sw.js, der Worker benennt damit seinen Cache und wirft
+        # beim Aktivieren alle alten Staende weg. Ohne das sammelte der
+        # Cache-Name 'journl-static-v1' jede Asset-Version unbegrenzt an.
+        "APP_VERSION": load_app_version(),
+    }
 
 _secret_key = os.environ.get("SECRET_KEY")
 if not _secret_key or _secret_key == "change-this-to-a-random-secret-key":
@@ -215,7 +234,8 @@ def _apply_env_overrides(items, prefix):
     """Apply AI_PROVIDER_<idx>_<KEY> / AI_FUNCTION_<idx>_<KEY> env overrides."""
     for idx, item in enumerate(items):
         item_prefix = f"{prefix}_{idx}"
-        for key in ["api_url", "model", "system_prompt", "max_tokens", "temperature", "api_key", "mode", "label"]:
+        for key in ["api_url", "model", "system_prompt", "max_tokens", "temperature", "thinking_budget",
+                    "api_key", "mode", "label"]:
             env_key = f"{item_prefix}_{key.upper()}"
             env_val = os.environ.get(env_key)
             if env_val is not None:
@@ -945,6 +965,10 @@ app.register_blueprint(_shopping_agent_routes.shopping_agent_bp)
 # Einkaufslisten-Agenten und laedt deshalb hinter ihm.
 import write_agent_routes as _write_agent_routes
 app.register_blueprint(_write_agent_routes.write_agent_bp)
+# Die semantische Suche liest ueber die Brain-Fassade und registriert ihren
+# Indexlauf bei background_runs; sie haengt deshalb hinter allen Brain-Modulen.
+import semantic_routes as _semantic_routes
+app.register_blueprint(_semantic_routes.semantic_bp)
 
 
 # Die einmalige Uebernahme von AUTH_USER/AUTH_PASS in users.json ist Altlast

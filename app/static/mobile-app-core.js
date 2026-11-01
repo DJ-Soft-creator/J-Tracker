@@ -199,25 +199,9 @@
           }
         }
 
-        // Historical tagging is intentionally restricted to local LM Studio providers.
-        const brainProviderSelect = document.getElementById('brain-tag-provider');
-        const brainRunButton = document.getElementById('brain-tag-run');
-        brainProviderSelect.replaceChildren();
-        brainProviderSelect.disabled = false;
-        const localProviders = (config.ai_providers || []).filter(p => String(p.id || '').startsWith('lm_'));
-        brainRunButton.disabled = localProviders.length === 0;
-        for (const p of localProviders) {
-          const opt = document.createElement('option');
-          opt.value = p.id;
-          opt.textContent = p.label;
-          brainProviderSelect.appendChild(opt);
-        }
-        if (localProviders.length === 0) {
-          const opt = document.createElement('option');
-          opt.textContent = 'Kein lokaler Anbieter konfiguriert';
-          brainProviderSelect.appendChild(opt);
-          brainProviderSelect.disabled = true;
-        }
+        // Historical tagging owns its own connection in the Brain settings
+        // (brain-tagging-run.js): endpoint and model are entered there, models
+        // are read live from that endpoint. Nothing to build from config here.
 
         // Build AI function dropdown
         const functionSelect = document.getElementById('ai-function-select');
@@ -410,6 +394,8 @@
         }
 
         Object.assign(payload, window.writeTargetsPayload?.() || {});
+        // Auf Reisen ergänzt der Server eine Ortszeit-Zeile, falls die Zone abweicht.
+        try { payload.client_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) { /* ohne Zone keine Zusatzzeile */ }
 
         const recordingBlock = window.writeSessionSubmissionBlockReason?.();
         if (recordingBlock) {
@@ -526,9 +512,12 @@
       toast.textContent = msg;
       toast.className = `fixed top-3 left-1/2 -translate-x-1/2 px-5 py-2.5 rounded-lg shadow-xl text-sm font-medium opacity-0 pointer-events-none transition-opacity duration-300 z-50 ${isError ? 'bg-red-600' : 'bg-green-600'} text-white`;
       toast.classList.remove('opacity-0', 'pointer-events-none');
-      setTimeout(() => {
-        toast.classList.add('opacity-0', 'pointer-events-none');
-      }, 2000);
+      // Fehler bleiben laenger stehen und lassen sich wegtippen - nach 2 s
+      // war z. B. der Grund einer gescheiterten Nachbearbeitung nicht lesbar.
+      const hide = () => toast.classList.add('opacity-0', 'pointer-events-none');
+      toast.onclick = hide;
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(hide, isError ? 8000 : 2000);
     }
 
     function applyYoutubeMode(enabled) {

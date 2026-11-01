@@ -10,6 +10,8 @@ from that facade before each request.
 
 import sys
 
+import local_time_note
+
 _core = sys.modules.get("main") or sys.modules.get("__main__")
 if _core is None:  # pragma: no cover - import order is a hard application invariant
     raise RuntimeError("main facade must exist before route modules are imported")
@@ -277,6 +279,7 @@ def api_submit():
             fields = template_def.get("fields", [])
             md_content = _write_form_markdown(label, time_str, fields, values, datetime_str)
 
+        md_content = local_time_note.append(md_content, local_time_note.note(now, data.get("client_timezone")))
         append_result = _append_journal_entry(uid, filepath, md_content) or {}
     except Exception:
         if media_stage:
@@ -898,8 +901,8 @@ def _journal_search_tag_paths(user_id, tags):
 @app.route("/api/journal-search")
 @require_auth
 def api_managed_journal_search():
-    """Search only the current user's confirmed db-managed DEV journals."""
-    if not IS_DEV or not is_enabled():
+    """Search only the current user's confirmed db-managed journals."""
+    if not is_enabled():
         return jsonify({"error": "Journalsuche ist nicht aktiv"}), 404
     query = request.args.get("q", "")
     try:

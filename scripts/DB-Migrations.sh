@@ -80,6 +80,12 @@ case "$ACTION" in status|upgrade) ;; *) die "Aktion muss status oder upgrade sei
     die "Keine Journl-DB-Migration im Zielcheckout gefunden."
 
 compose=(sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+# PROD haelt den postgres-Dienst hinter dem Compose-Profil "database" (bewusste
+# Opt-in-Entscheidung). Ohne das Profil blendet `config`/`ps` den Dienst aus und
+# die Existenzpruefung schluege fehl, obwohl die DB laeuft.
+if [[ "$TARGET" == "prod" ]]; then
+    compose+=(--profile database)
+fi
 services="$(cd "$BASE_DIR" && "${compose[@]}" config --services)"
 grep -Fxq "$APP_SERVICE" <<<"$services" || die "App-Service $APP_SERVICE fehlt im Compose-Vertrag."
 grep -Fxq "$DB_SERVICE" <<<"$services" || die "PostgreSQL-Service $DB_SERVICE fehlt im Compose-Vertrag."

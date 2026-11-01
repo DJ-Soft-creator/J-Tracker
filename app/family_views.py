@@ -202,6 +202,33 @@ def collect_assigned_tasks(documents, user_id, own_bucket_id=None):
     return collected
 
 
+RECENTLY_COMPLETED_LIMIT = 30
+
+
+def collect_recently_completed(documents, user_id, limit=RECENTLY_COMPLETED_LIMIT):
+    """Completed tasks that are not archived yet, newest first.
+
+    Lets the Familie tab undo an accidental check even after a reload: the
+    aggregate buckets drop completed tasks, so without this list a task
+    checked there could only be reset in its origin document - or not at all
+    when that document is not shared. Same visibility as the board: tasks
+    from accessible documents plus tasks assigned to the user. Shopping lists
+    (``exclude_from_personal``) stay out; their items are goods, not todos.
+    """
+    collected = []
+    for document, accessible in documents:
+        if document.get("exclude_from_personal"):
+            continue
+        for task in document.get("tasks", []):
+            if not task.get("completed") or not task.get("id"):
+                continue
+            if not accessible and (task.get("user") or "") != user_id:
+                continue
+            collected.append(_origin_task(task, document, accessible))
+    collected.sort(key=lambda task: str(task.get("completed_at") or ""), reverse=True)
+    return collected[:limit]
+
+
 def collect_unassigned_tasks(documents, user_id):
     """Open tasks without an assignee from documents the user may open.
 

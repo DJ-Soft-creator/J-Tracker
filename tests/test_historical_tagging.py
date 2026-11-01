@@ -102,6 +102,7 @@ class HistoricalTaggingTests(unittest.TestCase):
 
         def call_ai(provider, ai_function, user_prompt):
             calls.append(user_prompt)
+            self._last_prompt = user_prompt
             return answers[len(calls) - 1]
 
         report = historical_tagging.run_historical_tagging(
@@ -151,6 +152,118 @@ class HistoricalTaggingTests(unittest.TestCase):
         self.assertEqual((second["processed"], second["skipped"], second["calls"]), (1, 1, 1))
         self.assertEqual((third["processed"], third["skipped"], third["calls"]), (0, 2, 0))
 
+    def test_missing_mode_revisits_a_stamped_day_with_an_untagged_block(self):
+        """Ein beim ersten Lauf ausgelassener Eintrag bleibt nicht fuer immer leer."""
+        path = self._journal(
+            "2026-08-04",
+            "___\n\n## A | Datum & Uhrzeit: 2026-08-04 12:00:00\nEins\n\n___\n\n"
+            "## B | Datum & Uhrzeit: 2026-08-04 13:00:00\nZwei\n\n___\n",
+        )
+        self._run(
+            ['{"blocks":{"2026-08-04 12:00:00":["frisch"],"2026-08-04 13:00:00":[]},"proposed_tags":["frisch"]}'],
+            mode="missing",
+        )
+        _, stamped = tagging.strip_footer(path.read_text(encoding="utf-8"))
+        self.assertTrue(tagging.footer_ai_run(stamped))
+        self.assertNotIn("2026-08-04 13:00:00", stamped["blocks"])
+
+        # Nur der offene Block geht erneut an das Modell; der getaggte behaelt,
+        # was er hat.
+        report = self._run(
+            ['{"blocks":{"2026-08-04 13:00:00":["spaet"]},"proposed_tags":[]}'],
+            mode="missing",
+        )
+
+        self.assertEqual((report["processed"], report["skipped"], report["calls"]), (1, 0, 1))
+        _, footer = tagging.strip_footer(path.read_text(encoding="utf-8"))
+        self.assertEqual(footer["blocks"]["2026-08-04 13:00:00"], ["spaet"])
+        self.assertEqual(footer["blocks"]["2026-08-04 12:00:00"], ["frisch"])
+        self.assertEqual(footer["ai"]["2026-08-04 12:00:00"], ["frisch"])
+
+    def test_a_new_entry_with_its_own_hashtag_still_reaches_the_model(self):
+        """Der PROD-Befund: ein Eintrag mit eigenem Hashtag galt als erledigt."""
+        path = self._journal(
+            "2026-08-04", "___\n\n## A | Datum & Uhrzeit: 2026-08-04 12:00:00\nEins\n\n___\n",
+        )
+        self._run(['{"blocks":{"2026-08-04 12:00:00":["frisch"]},"proposed_tags":["frisch"]}'],
+                  mode="missing")
+        content = path.read_text(encoding="utf-8")
+        body, footer = tagging.strip_footer(content)
+        body = body.rstrip() + "\n\n## B | Datum & Uhrzeit: 2026-08-04 18:00:00\nZwei #meins\n\n___\n"
+        path.write_text(tagging.refresh_journal_footer("alex", body, "2026-08-04", footer), encoding="utf-8")
+
+        report = self._run(['{"blocks":{"2026-08-04 18:00:00":["frisch"]},"proposed_tags":[]}'],
+                           mode="missing")
+
+        self.assertEqual((report["processed"], report["calls"]), (1, 1))
+        _, footer = tagging.strip_footer(path.read_text(encoding="utf-8"))
+        self.assertEqual(footer["blocks"]["2026-08-04 18:00:00"], ["frisch", "meins"])
+        self.assertEqual(footer["ai"]["2026-08-04 18:00:00"], ["frisch"])
+        self.assertEqual(footer["ai_seen"], ["2026-08-04 12:00:00", "2026-08-04 18:00:00"])
+        # Danach ist der Tag erledigt.
+        self.assertEqual(self._run([], mode="missing")["calls"], 0)
+
+    def test_an_old_footer_counts_entries_written_after_its_stamp_as_new(self):
+        """Fussnoten ohne ``ai_seen``: was nach dem Stempel geschrieben wurde, ist neu."""
+        path = self._journal(
+            "2026-08-04",
+            "___\n\n## A | Datum & Uhrzeit: 2026-08-04 08:00:00\nEins #alt\n\n___\n\n"
+            "## B | Datum & Uhrzeit: 2026-08-04 20:00:00\nZwei #neu\n\n___\n",
+        )
+        content = path.read_text(encoding="utf-8")
+        body, _ = tagging.strip_footer(content)
+        tagging.propose_tags("alex", ["alt", "neu"])
+        catalogs = [tagging.read_catalog("alex"), tagging.read_catalog(family=True)]
+        blocks = tagging.journal_blocks(body, "2026-08-04")
+        # Stempel 10:00 UTC = 12:00 in Berlin: A lag davor, B kam spaeter dazu.
+        footer = tagging.render_footer(blocks, catalogs, {}, "2026-08-04T10:00:00+00:00")
+        path.write_text(body.rstrip() + "\n\n" + footer, encoding="utf-8")
+
+        report = self._run(['{"blocks":{"2026-08-04 20:00:00":["abend"]},"proposed_tags":[]}'],
+                           mode="missing")
+
+        self.assertEqual((report["processed"], report["calls"]), (1, 1))
+        _, footer = tagging.strip_footer(path.read_text(encoding="utf-8"))
+        self.assertEqual(footer["blocks"]["2026-08-04 08:00:00"], ["alt"])
+        self.assertEqual(footer["blocks"]["2026-08-04 20:00:00"], ["abend", "neu"])
+
+    def test_established_hashtags_lead_the_prompt_and_action_tags_stay_out(self):
+        self._journal("2026-08-04", "___\n\n## A | Datum & Uhrzeit: 2026-08-04 12:00:00\nEins\n\n___\n")
+        tagging.update_catalog("alex", False, "approve", "selten")
+        tagging.update_catalog("alex", False, "approve", "oft")
+        index = {"version": 1, "references": [
+            {"source": "personal", "user_id": "alex", "tags": ["oft", "beliebt"]} for _ in range(4)
+        ] + [{"source": "personal", "user_id": "jemand", "tags": ["fremd"]} for _ in range(5)]}
+        original = tagging.get_index
+        tagging.get_index = lambda: index
+        try:
+            report = self._run(['{"blocks":{"2026-08-04 12:00:00":[]},"proposed_tags":[]}'])
+        finally:
+            tagging.get_index = original
+        self.assertEqual(report["errors"], [])
+        prompt = self._last_prompt
+        self.assertIn('Known=["beliebt", "oft", "selten"]', prompt)
+        self.assertIn("beliebt (4), oft (4)", prompt)
+        self.assertNotIn("fremd", prompt)
+
+    def test_a_fully_tagged_stamped_day_is_not_sent_again(self):
+        self._journal("2026-08-04", "___\n\n## A | Datum & Uhrzeit: 2026-08-04 12:00:00\nEins\n\n___\n")
+        answer = '{"blocks":{"2026-08-04 12:00:00":["frisch"]},"proposed_tags":["frisch"]}'
+        self._run([answer], mode="missing")
+
+        report = self._run([], mode="missing")
+
+        self.assertEqual((report["processed"], report["skipped"], report["calls"]), (0, 1, 0))
+
+    def test_an_ordinary_save_keeps_what_the_model_has_seen(self):
+        path = self._journal("2026-08-04", "___\n\n## A | Datum & Uhrzeit: 2026-08-04 12:00:00\nEins\n\n___\n")
+        self._run(['{"blocks":{"2026-08-04 12:00:00":[]},"proposed_tags":[]}'], mode="missing")
+
+        refreshed = tagging.refresh_journal_footer("alex", path.read_text(encoding="utf-8"), "2026-08-04")
+
+        _, footer = tagging.strip_footer(refreshed)
+        self.assertEqual(footer["ai_seen"], ["2026-08-04 12:00:00"])
+
     def test_a_batch_names_the_next_day_because_refresh_never_advances_by_itself(self):
         """A caller has to move start_date along; refresh leaves every day due."""
         self._journal("2026-08-04", "___\n\n## A | Datum & Uhrzeit: 2026-08-04 12:00:00\nEins\n\n___\n")
@@ -186,6 +299,43 @@ class HistoricalTaggingTests(unittest.TestCase):
         _, footer = tagging.strip_footer(path.read_text(encoding="utf-8"))
         self.assertEqual(footer["blocks"], {"2026-08-04 12:00:00": ["meins", "neu"]})
         self.assertEqual(footer["ai"], {"2026-08-04 12:00:00": ["neu"]})
+
+    def _take_back(self, path, day, anchor, tags):
+        """Mirror "Alle Hashtags bearbeiten": the user removes a model's hashtags."""
+        body, footer = tagging.strip_footer(path.read_text(encoding="utf-8"))
+        changed, removed = tagging.reject_ai_tags(footer, [anchor], tags)
+        path.write_text(
+            tagging.refresh_journal_footer("alex", body, day, existing_footer=changed),
+            encoding="utf-8",
+        )
+        return removed
+
+    def test_a_hashtag_the_user_took_back_is_not_assigned_again(self):
+        path = self._journal(
+            "2026-08-04",
+            "___\n\n## Note | Datum & Uhrzeit: 2026-08-04 12:00:00\nEigener Text\n\n___\n",
+        )
+        self._run(['{"blocks":{"2026-08-04 12:00:00":["falsch","gut"]},"proposed_tags":["falsch","gut"]}'])
+        self.assertEqual(self._take_back(path, "2026-08-04", "2026-08-04 12:00:00", ["falsch"]), ["falsch"])
+
+        self._run(['{"blocks":{"2026-08-04 12:00:00":["falsch","gut"]},"proposed_tags":[]}'], mode="refresh")
+
+        _, footer = tagging.strip_footer(path.read_text(encoding="utf-8"))
+        self.assertEqual(footer["blocks"], {"2026-08-04 12:00:00": ["gut"]})
+        self.assertEqual(footer["ai"], {"2026-08-04 12:00:00": ["gut"]})
+        self.assertEqual(footer["ai_rejected"], {"2026-08-04 12:00:00": ["falsch"]})
+
+    def test_a_block_emptied_by_the_user_gets_no_second_chance(self):
+        path = self._journal(
+            "2026-08-04",
+            "___\n\n## Note | Datum & Uhrzeit: 2026-08-04 12:00:00\nEigener Text\n\n___\n",
+        )
+        self._run(['{"blocks":{"2026-08-04 12:00:00":["falsch"]},"proposed_tags":["falsch"]}'])
+        self._take_back(path, "2026-08-04", "2026-08-04 12:00:00", ["falsch"])
+
+        report = self._run([], mode="missing")
+
+        self.assertEqual((report["processed"], report["skipped"], report["calls"]), (0, 1, 0))
 
     def test_stale_mode_only_revisits_files_classified_before_a_date(self):
         self._journal("2026-08-04", "___\n\n## A | Datum & Uhrzeit: 2026-08-04 12:00:00\nEins\n\n___\n")
@@ -240,6 +390,23 @@ class HistoricalTaggingTests(unittest.TestCase):
         self.assertEqual(report["proposals"], ["neuestag"])
         self.assertEqual(report["files"][0]["blocks"][0]["ai_tags"], ["neuestag"])
 
+    def test_only_hashtags_new_to_the_catalog_are_reported_as_proposals(self):
+        """A proposal that already waited in the catalog is not news again."""
+        self._journal(
+            "2026-08-04",
+            "___\n\n## A | Datum & Uhrzeit: 2026-08-04 12:00:00\nEin Gedanke #selbst\n\n___\n",
+        )
+        tagging.propose_tags("alex", ["alterhut"])
+
+        report = self._run([
+            '{"blocks":{"2026-08-04 12:00:00":["alterhut","frisch","selbst"]},"proposed_tags":["frisch"]}'
+        ])
+
+        self.assertEqual(report["proposals"], ["frisch"])
+        self.assertEqual(
+            sorted(tagging.read_catalog("alex")["proposals"]), ["alterhut", "frisch", "selbst"],
+        )
+
     def test_a_hashtag_the_user_blocked_stays_out_even_when_the_model_uses_it(self):
         path = self._journal(
             "2026-08-04",
@@ -252,6 +419,64 @@ class HistoricalTaggingTests(unittest.TestCase):
         _, footer = tagging.strip_footer(path.read_text(encoding="utf-8"))
         self.assertEqual(footer["blocks"], {})
         self.assertEqual(report["proposals"], [])
+
+    def test_a_globally_excluded_hashtag_is_never_assigned_in_any_mode(self):
+        tagging.update_catalog("alex", False, "approve", "info")
+        tagging.update_catalog("alex", False, "alias", "infos", "info")
+        tagging.update_catalog("alex", False, "ai_exclude", "#Info")
+        tagging.update_catalog("alex", False, "ai_exclude", "sammel")
+        self.assertEqual(tagging.read_catalog("alex")["ai_excluded"], ["info", "sammel"])
+
+        for day, mode, options in (
+            ("2026-08-04", "refresh", {}),
+            ("2026-08-05", "stale", {"stale_before": "2099-01-01"}),
+            ("2026-08-06", "missing", {}),
+        ):
+            with self.subTest(mode=mode):
+                anchor = day + " 12:00:00"
+                path = self._journal(day, "___\n\n## A | Datum & Uhrzeit: {}\nEin Gedanke #info\n\n___\n".format(anchor))
+                answer = '{"blocks":{"%s":["info","infos","gut","sammel"]},"proposed_tags":["sammel"]}' % anchor
+
+                report = self._run([answer], start=day, end=day, mode=mode, **options)
+
+                _, footer = tagging.strip_footer(path.read_text(encoding="utf-8"))
+                # Das selbst geschriebene #info bleibt, nur die KI vergibt es nicht.
+                self.assertEqual(footer["blocks"], {anchor: ["gut", "info"]})
+                self.assertEqual(footer["ai"], {anchor: ["gut"]})
+                self.assertNotIn("sammel", report["proposals"])
+        self.assertNotIn("sammel", tagging.read_catalog("alex")["proposals"])
+
+    def test_excluding_a_hashtag_drops_what_an_earlier_run_assigned(self):
+        path = self._journal(
+            "2026-08-04",
+            "___\n\n## A | Datum & Uhrzeit: 2026-08-04 08:00:00\nEins\n\n"
+            "___\n\n## B | Datum & Uhrzeit: 2026-08-04 09:00:00\nZwei #sammel\n\n___\n",
+        )
+        self._run(['{"blocks":{"2026-08-04 08:00:00":["sammel","gut"],'
+                   '"2026-08-04 09:00:00":["gut"]},"proposed_tags":["sammel","gut"]}'])
+        tagging.update_catalog("alex", False, "ai_exclude", "sammel")
+        body, footer = tagging.strip_footer(path.read_text(encoding="utf-8"))
+        body += "\n## C | Datum & Uhrzeit: 2026-08-04 20:00:00\nDrei\n\n___\n"
+        path.write_text(tagging.refresh_journal_footer("alex", body, "2026-08-04", existing_footer=footer), encoding="utf-8")
+
+        self._run(['{"blocks":{"2026-08-04 20:00:00":["sammel"]},"proposed_tags":[]}'], mode="missing")
+
+        _, footer = tagging.strip_footer(path.read_text(encoding="utf-8"))
+        self.assertEqual(footer["blocks"]["2026-08-04 08:00:00"], ["gut"])
+        # Selbst geschrieben: bleibt, obwohl ausgeschlossen.
+        self.assertEqual(footer["blocks"]["2026-08-04 09:00:00"], ["gut", "sammel"])
+        self.assertNotIn("2026-08-04 20:00:00", footer["blocks"])
+        self.assertEqual(footer["ai"]["2026-08-04 08:00:00"], ["gut"])
+
+    def test_an_excluded_hashtag_is_not_recommended_in_the_prompt(self):
+        self._journal("2026-08-04", "___\n\n## A | Datum & Uhrzeit: 2026-08-04 12:00:00\nEins\n\n___\n")
+        tagging.update_catalog("alex", False, "approve", "oft")
+        tagging.update_catalog("alex", False, "approve", "info")
+        tagging.update_catalog("alex", False, "ai_exclude", "info")
+
+        self._run(['{"blocks":{"2026-08-04 12:00:00":[]},"proposed_tags":[]}'])
+
+        self.assertIn('Known=["oft"]', self._last_prompt)
 
     def test_a_failing_journal_is_named_with_its_date(self):
         self._journal(
@@ -521,6 +746,7 @@ class ServerSideRunTests(unittest.TestCase):
         self.old_core = historical_tagging._core_module
         historical_tagging._core_module = lambda: self.core
         self.core = types.SimpleNamespace(
+            DATA_DIR=self.root,
             load_config=lambda: {
                 "ai_providers": [{"id": "lm_test", "model": "local"}],
                 "historical_tagging_ai": {
@@ -530,6 +756,11 @@ class ServerSideRunTests(unittest.TestCase):
             },
             _call_ai_api=self._call_ai,
             brain_module=types.SimpleNamespace(enqueue_rebuild=lambda user_id: None),
+        )
+        # Die Verschlagwortung liest ihre Verbindung aus der gespeicherten
+        # Einstellung, nicht mehr aus ``ai_providers``.
+        historical_tagging.save_settings(
+            "alex", {"base_url": "http://127.0.0.1:1234", "model": "local"},
         )
 
     def tearDown(self):
@@ -563,6 +794,60 @@ class ServerSideRunTests(unittest.TestCase):
         )
         return path
 
+    def test_settings_keep_the_daily_hour_but_never_expose_the_key(self):
+        saved = historical_tagging.save_settings("alex", {
+            "base_url": "http://127.0.0.1:1234", "model": "local",
+            "api_key": "secret", "daily": True, "daily_hour": 22,
+        })
+        loaded = historical_tagging.load_settings("alex")
+
+        # Die alten Felder werden zum taeglichen Job um diese Stunde.
+        self.assertEqual((loaded["enabled"], loaded["schedule_mode"], loaded["schedule_time"]),
+                         (True, "daily", "22:00"))
+        self.assertEqual(loaded["api_key"], "secret")
+        self.assertEqual(historical_tagging.provider_from_settings(saved)["api_url"],
+                         "http://127.0.0.1:1234/v1/chat/completions")
+        self.assertNotIn("api_key", historical_tagging.public_settings(loaded))
+
+    def test_settings_reject_an_hour_outside_the_day(self):
+        with self.assertRaises(ValueError):
+            historical_tagging.save_settings("alex", {
+                "base_url": "http://127.0.0.1:1234", "model": "local", "daily_hour": 24,
+            })
+
+    def test_the_job_can_change_its_schedule_without_resending_the_connection(self):
+        saved = historical_tagging.save_settings("alex", {
+            "enabled": True, "schedule_mode": "custom", "schedule_time": "06:30",
+            "schedule_rule": {"kind": "weekly", "weekdays": [0, 4]}, "range_days": 3,
+            "mode": "refresh", "notify": {"errors": False, "proposals": True},
+        })
+
+        self.assertEqual(saved["model"], "local")
+        public = historical_tagging.public_settings(historical_tagging.load_settings("alex"))
+        self.assertEqual(public["schedule_rule"], {"kind": "weekly", "weekdays": [0, 4]})
+        self.assertEqual(public["notify"], {"errors": False, "results": False, "proposals": True})
+        self.assertEqual((public["range_days"], public["mode"]), (3, "refresh"))
+
+    def test_an_active_schedule_needs_a_connection(self):
+        historical_tagging._settings_path("alex").unlink()
+        with self.assertRaises(ValueError):
+            historical_tagging.save_settings("alex", {"enabled": True, "schedule_mode": "daily"})
+
+    def test_a_finished_run_files_the_notices_its_job_asks_for(self):
+        historical_tagging.save_settings("alex", {"notify": {"errors": True, "results": True}})
+        historical_tagging.on_run_finished({
+            "user_id": "alex", "status": "done", "trigger": "manual", "params": {},
+            "result": {"processed": 2, "failed": 1, "proposals": ["neu"]},
+        })
+        historical_tagging.on_run_finished({
+            "user_id": "alex", "status": "failed", "trigger": "schedule", "error": "weg",
+            "params": {"defer_failure_notice": True}, "result": {},
+        })
+
+        events = historical_tagging.tagging_job.list_events(self.root, "alex")
+        self.assertEqual([(item["kind"], item["count"]) for item in events],
+                         [("tagging_error", 1), ("tagging_result", 2)])
+
     def test_the_whole_range_runs_in_one_go_without_a_browser(self):
         """Früher trieb JavaScript die Schleife; jetzt läuft sie hier durch."""
         for date in ("2026-08-01", "2026-08-02", "2026-08-03"):
@@ -571,7 +856,7 @@ class ServerSideRunTests(unittest.TestCase):
 
         result = historical_tagging.run_handler(handle, {
             "start_date": "2026-08-01", "end_date": "2026-08-03",
-            "mode": "missing", "provider_id": "lm_test",
+            "mode": "missing",
         })
 
         self.assertEqual(result["processed"], 3)
@@ -595,7 +880,7 @@ class ServerSideRunTests(unittest.TestCase):
         with self.assertRaises(historical_tagging.background_runs.RunError) as caught:
             historical_tagging.run_handler(handle, {
                 "start_date": "2026-08-01", "end_date": "2026-08-03",
-                "mode": "missing", "provider_id": "lm_test",
+                "mode": "missing",
             })
 
         self.assertIn("nicht erreichbar", str(caught.exception))
@@ -617,7 +902,7 @@ class ServerSideRunTests(unittest.TestCase):
 
         result = historical_tagging.run_handler(handle, {
             "start_date": "2026-08-01", "end_date": "2026-08-02",
-            "mode": "missing", "provider_id": "lm_test",
+            "mode": "missing",
         })
 
         self.assertEqual(result["failed"], 1)
@@ -630,20 +915,23 @@ class ServerSideRunTests(unittest.TestCase):
 
         result = historical_tagging.run_handler(handle, {
             "start_date": "2026-08-01", "end_date": "2026-08-03",
-            "mode": "missing", "provider_id": "lm_test",
+            "mode": "missing",
         })
 
         self.assertLess(result["processed"], 3)
         self.assertIn("abgebrochen", result["stopped"])
 
-    def test_a_provider_that_disappeared_is_named_before_anything_runs(self):
+    def test_a_missing_connection_is_named_before_anything_runs(self):
         self._journal("2026-08-01")
+        # Ohne gespeicherte Verbindung darf der Lauf nicht erst beim ersten Tag
+        # scheitern und auch nicht stillschweigend irgendetwas anfassen.
+        historical_tagging._settings_path("alex").unlink()
         handle = _FakeHandle()
 
         with self.assertRaises(historical_tagging.background_runs.RunError):
             historical_tagging.run_handler(handle, {
                 "start_date": "2026-08-01", "end_date": "2026-08-01",
-                "mode": "missing", "provider_id": "lm_gone",
+                "mode": "missing",
             })
         self.assertEqual(self.calls, [])
 

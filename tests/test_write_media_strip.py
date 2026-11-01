@@ -77,7 +77,7 @@ class WriteMediaStripTests(unittest.TestCase):
         self.assertIn("#write-media-shell:not(.hidden) ~ #mobile-controls-scroll", mobile)
         for template_name in ("desktop.html", "index.html"):
             template = _read("app", "templates", template_name)
-            self.assertIn("filename='write-media-strip.js', v='20260915-2'", template)
+            self.assertIn("filename='write-media-strip.js', v='20261003-1'", template)
             self.assertLess(
                 template.index("filename='write-media-strip.js'"),
                 template.index("filename='write-session.js'"),

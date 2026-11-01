@@ -247,6 +247,19 @@
       bar.appendChild(select);
     }
 
+    // Klassiker kommen aus der Kaufhistorie dieser Liste (was frueher
+    // abgehakt wurde) - der Agent ergaenzt nur, was gerade faellig ist.
+    const staples = document.createElement('button');
+    staples.type = 'button';
+    staples.className = 'rounded-lg border border-gray-800 px-2.5 py-1 text-xs text-gray-300 hover:border-green-800 hover:text-green-300 disabled:opacity-40';
+    staples.disabled = state.busy || !state.configured;
+    staples.textContent = 'Klassiker ergänzen';
+    staples.title = 'Artikel, die ihr regelmäßig kauft und die gerade fällig sind, auf die Liste setzen';
+    staples.addEventListener('click', () => {
+      ask('Ergänze die Klassiker: Artikel aus unserer Kaufhistorie, die gerade fällig sind und noch nicht auf der Liste stehen.');
+    });
+    bar.appendChild(staples);
+
     const clean = document.createElement('button');
     clean.type = 'button';
     clean.className = 'rounded-lg border border-gray-800 px-2.5 py-1 text-xs text-gray-400 hover:border-gray-700 hover:text-gray-200 disabled:opacity-40';
@@ -311,6 +324,9 @@
     // Erst beim Schliessen neu laden: waehrend des Dialogs wuerde ein
     // Neuaufbau des Boards das offene Fenster unter den Haenden wegziehen.
     if (state.changed && typeof window.loadFamily === 'function') window.loadFamily();
+    document.dispatchEvent(new CustomEvent('journl:shopping-agent-closed', {
+      detail: { projectId: state.projectId, changed: state.changed },
+    }));
     state.changed = false;
   }
 

@@ -2,9 +2,10 @@
 
 ![Journl Logo](Screenshots/neues_Logo_light_dark.png)
 
-Eine selbst gehostete Web-App für ein digitales Journal: Markdown-Dateien als
-Datenbestand, mehrere Eingabe-Templates, Familienplanung, lokale Volltextsuche
-und optionale KI — mit lokalen Modellen statt Cloud-Zwang.
+Eine selbst gehostete Web-App (plus Terminal-Client) für ein digitales Journal:
+Markdown-Dateien als Datenbestand, mehrere Eingabe-Templates, Familienplanung,
+lokale Volltext- und optionale semantische Suche, ein Medienplayer für die
+Fokus-Kulisse und optionale KI — mit lokalen Modellen statt Cloud-Zwang.
 
 **Markdown ist die maßgebliche Datenquelle.** Alle Indizes, Hashtag-Kataloge und
 Suchbeschleuniger sind jederzeit aus den Dateien neu aufbaubar. Wer die App
@@ -26,32 +27,41 @@ Kurze Demo: https://youtu.be/iT8kh9ieWuw
 
 - **Tägliche Journaleinträge** — Ablage unter `<user-id>/Jahr/Monat/Tag/Journal_YYYY-MM-DD.md`, Einträge durch `___` getrennt
 - **Mehrere Templates** — Schnell, Aufgabe, Nebengedanke, Thema, Brainablage, Idee, Erkenntnis sowie eigene Formulare
-- **Schreibsessions & Medien** — Geräteübergreifende Entwürfe, private Fotos und chunkweise hochgeladene Sprachnachrichten
+- **Schreibsessions & Medien** — Geräteübergreifende Entwürfe, private Fotos und chunkweise hochgeladene Sprachnachrichten; Einträge aus einer anderen Zeitzone bekommen eine Ortszeit-Zeile, die Tagesdatei bleibt Serverzeit
 - **Ansicht beim Start** — Schreibfeld, Lesefassung oder (nur Desktop) beides nebeneinander; die Wahl hängt am Gerät, nicht am Konto
 - **Versionshistorie** — Frühere Fassungen eines Tages ansehen und wiederherstellen, inklusive der zugehörigen Medien
 - **Dashboard „Heute"** — Alle Einträge des Tages mit Inline-Bearbeitung und Löschfunktion
-- **Bildschirmschoner / Fokus-Kulisse** — Vollflächige Diashow aus dem Burger-Menü, wahlweise mit Schreibfeld über den Bildern. Die Bilder holt und cacht der Server (Wikimedia-Themen, eigene Ordner unter `DATA_DIR/screensaver/`, eigene Journalbilder), damit die CSP dicht bleibt und die Diashow offline weiterläuft
+- **Terminal-Client `journl`** — Schreiben, Heute-Liste und Brain-Suche im Terminal, mit Hashtag-Vervollständigung, Zeitraumfiltern und Offline-Entwurf. Dieselbe HTTP-API wie die Web-App, kein eigener Server
+- **Bildschirmschoner / Fokus-Kulisse** — Vollflächige Diashow aus dem Burger-Menü, wahlweise mit Schreibfeld über den Bildern. Die Bilder holt und cacht der Server (Wikimedia-Themen, eigene Ordner unter `DATA_DIR/screensaver/`, eigene Journalbilder), damit die CSP dicht bleibt und die Diashow offline weiterläuft. Presets starten eine Zusammenstellung per Menü, Overlay, Taste oder Link
+- **Fragen-Modus und Klangbild** — Der Schoner stellt Fragen über der Show oder führt eine Fragen-Session mit Antwortknöpfen, Quiz und Sequenzen. Das Klangbild wabert zur Musik, wahlweise sanft, im Takt oder wild, mit psychedelischen Formen wie Kaleidoskop, Mandala, Tunnel, Fraktal und Plasma
+- **Player in Kulisse und Schreiben-Tab** — Eigene Musik mit Crossfade und ID3-Titeln, Podcast-Abos mit Tempo und Fortschritt, Internetradio über einen Server-Proxy, Sleep-Timer und Lichteffekte mit Farbe aus dem Bild. Läuft mobil über die untere Leiste, auf iOS ohne Crossfade und Lautstärke-Regelung
 
 ### Suche und Struktur
 
 - **Brain** — Lokale Volltextsuche, Timeline, Aufgaben- und Tag-Explorer über die erlaubten Markdown-Quellen, mit Editor im selben Tab
+- **Hashtag-Map** — Übersicht, Orbit, Cluster und Hirn-Modus mit Themenfeldern, Zeitfarben, Filter-Chips, Reindrillen und speicherbarer Anordnung
+- **Semantische Suche (optional, opt-in)** — Jede Person schaltet sie für sich ein und wählt ihre Quellen; Admins hinterlegen einen OpenAI-kompatiblen Embedding-Endpunkt und ein Modell. Qdrant hält je Konto und für die Familie eine eigene Collection, der Nachtlauf gleicht über einen Inhalts-Hash ab. Im Brain-Tab ordnet die Sortierung „Relevanz“ die Treffer nach Wort und Bedeutung (RRF), jede Karte zeigt, ob sie über die Bedeutung gefunden wurde; „Ähnliche Einträge“ im Kartenmenü, die MCP-Werkzeuge `semantic_search`/`find_similar` und der Chat-Schalter „Bedeutungssuche“ nutzen dieselbe Suche. Fällt das Modell aus, bleibt die Wortsuche mit Hinweis
 - **Hashtags** — `#stichwort` mitten im Text, mit Katalog, Alias, Ersetzen und optionaler KI-Verschlagwortung (siehe unten)
 - **Sammelmappen** — Themenmappen und Tagesablage über das Burger-Menü; das Einsammeln übernimmt `scripts/bucket-scheduler.py`
 - **Lokales Whisper** — Optionaler CPU-Dienst mit API-Key und Zeitmarken; der Zeitplan ist in den Einstellungen umstellbar (stündlich, täglich zu einer Uhrzeit, nur manuell)
 
 ### Familie
 
-- **Familien-Planung** — Einmalige und wiederkehrende Aufgaben mit Verantwortlichkeit, Startdatum, Vorschau, Pausieren und Bearbeiten
-- **Board mit Buckets** — Aufgaben, Projekte, Notizen und Einkaufslisten als ein Dateityp, unterschieden durch `type` im Frontmatter
+- **Familien-Planung** — Einmalige und wiederkehrende Aufgaben mit Verantwortlichkeit, Startdatum, Vorschau, Pausieren, Bearbeiten und mehreren Aufgaben auf einmal; die Schnell-Erfassung versteht „nächsten Mi“, „Ende des Monats“ und Wiederholungen
+- **Board mit Buckets** — Aufgaben, Projekte, Notizen und Einkaufslisten als ein Dateityp, unterschieden durch `type` im Frontmatter. Erledigtes wandert nach sieben Tagen ins Familien-Archiv
+- **Einkaufslisten mit Kaufhistorie** — Abgehakte Artikel landen in `family/shopping-history/<id>.json`; der Einkaufslisten-Agent kann daraus regelmäßig Gekauftes als „Klassiker“ ergänzen
 - **Daily Scheduler** — Idempotente Aufgabenerzeugung als Compose-Service, zusätzlich geprüft beim Öffnen des Familienbereichs
 
 ### KI (optional, bevorzugt lokal)
 
 - **KI-Anbieter in der Oberfläche** — Endpunkte, Modelle und Standard-Agent unter Burger → AI-Worker → Anbieter. API-Schlüssel verlassen den Server nie; nach außen geht nur, *ob* ein Schlüssel hinterlegt ist
 - **Schreib-Agent** — Arbeitet auf dem Text im Schreibfeld, erreichbar aus Schreiben, Heute und Brain. Mehrere Wissens-Hashtags, Schreibziele aus der `config.json`, Wahl des Agenten. **Er speichert nichts**: das Ergebnis kommt als Vorschlag und landet erst mit „Übernehmen" im Feld
-- **Einkaufslisten-Agent** — Sortieren, doppelte Artikel zusammenfassen, ergänzen, umbenennen, abhaken. Sortiert nach dem eigenen Ladenaufbau, sobald eine Notiz hinter einem Knowledge-Hashtag liegt. Legt vor dem ersten Schreibzugriff einen Wiederherstellungspunkt an
-- **Chat with your Notes** — Chatansicht im Brain-Tab, in der ein lokales Modell die eigenen Journale über dieselben Werkzeuge wie `/mcp/privat` beantwortet. Jeder Turn landet als `Chat_<datum>_<zeit>.md` im Tagesordner und ist über die Brain-Suche auffindbar
-- **KI-Verschlagwortung** — Ein lokales Modell trägt Hashtags für alte Journale nach, ohne Blocktext zu verändern
+- **Einkaufslisten-Agent** — Sortieren, doppelte Artikel zusammenfassen, ergänzen, umbenennen, abhaken und Klassiker aus der Kaufhistorie vorschlagen. Sortiert nach dem eigenen Ladenaufbau, sobald eine Notiz hinter einem Knowledge-Hashtag liegt. Legt vor dem ersten Schreibzugriff einen Wiederherstellungspunkt an
+- **Chat with your Notes** — Chatansicht im Brain-Tab, in der ein lokales Modell die eigenen Journale über dieselben Werkzeuge wie `/mcp/privat` beantwortet, auf Wunsch auch Projekte und Notizen und — mit dem Schalter „Bedeutungssuche“ — über die semantische Suche. Jeder Turn landet als `Chat_<datum>_<zeit>.md` im Tagesordner und ist über die Brain-Suche auffindbar
+- **Spracheingabe und Vorlesen** — Zwei Mikrofon-Wege (Whisper und lokaler ASR), Live-Vorschau, Presets für die Nachbearbeitung und „Text vorlesen“ über einen lokalen TTS-Endpunkt
+- **Journal-Analyse** — Wiederkehrende Analysen eigener Journale über Zeiträume, pro Tag mit fortgeschriebenem Kontext. Ergebnisse landen als Hinweis im Schreiben-Tab, optional im Tagesjournal, als Familiendokument oder in den Notizen. Erinnerungen wie „morgen 10 Uhr“ erkennt ein Regelwerk auch ohne KI und meldet sie zur Fälligkeit
+- **Pushover-Benachrichtigungen** — Eigenes Konto pro Nutzer, Auslöser für Analyse-Erinnerungen, Ergebnisse, Fehler und fällige Familienaufgaben, mit Ruhezeit, Bündelung und Deep-Link
+- **KI-Verschlagwortung** — Ein lokales Modell trägt Hashtags für alte Journale nach, ohne Blocktext zu verändern; als geplanter Job mit Protokoll, Wiederholungen, KI-Ausschluss und optionalen Meldungen
 - **Agent-Projekte („An Agent senden")** — Ein Projekt verbindet einen freigegebenen Linux-Ordner, den Modus Lesen/Schreiben/Ausführen, eine lokale Verbindung (LM Studio, Ollama, llama.cpp oder OpenAI-kompatibel) und optional Journal und gewählte Dateien als Kontext. `opencode run` oder Pi arbeiten über den Host-Worker
 - **Share-API & AI-Workflows** — Text, URLs, Audio, Bilder und Dokumente direkt ablegen oder per persönlichem Workflow als Journaleintrag verarbeiten
 - **Lange Läufe überleben ein gesperrtes Handy** — Verschlagwortung und Agentenaufträge laufen serverseitig; ihr Stand ist über `/api/runs*` jederzeit wieder abrufbar
@@ -60,6 +70,7 @@ Kurze Demo: https://youtu.be/iT8kh9ieWuw
 
 - **Authentifizierung** — HTTP-only Session mit CSRF-Schutz und Login-Rate-Limiting
 - **Responsive** — Getrennte Oberflächen für Desktop (mausoptimiert) und Mobil (touch-optimiert)
+- **Installierbare PWA** — Eigener Service-Worker-Cache mit App-Version, lazy geladene Agentenmodule und eine Startzeit-Messung unter „Über Journl“
 - **Dark Mode Only** — Durchgängiges „Midnight"-Design mit grünem Akzent
 
 ## Schnellstart
@@ -139,6 +150,14 @@ scripts/run-tests.sh --db                # zusätzlich die PostgreSQL-Integratio
 | `JOURNAL_DATA_DIR` | `/docker-storage/my_Journal_data/data/journals/` | Host-Verzeichnis, das Docker Compose nach `/app/data` mountet |
 | `DATA_DIR` | `/app/data` | Gemeinsames Datenverzeichnis für Journale, Familienaufgaben und Planner |
 | `SCHEDULER_HOUR` | `6` | Lokale Ausführungsstunde des Scheduler-Services |
+| `TAGGING_POLL_SECONDS` | `300` | Abfrageintervall des Hashtag-Nachtragsjobs (jede Person wählt ihre Stunde selbst) |
+| `JOURNAL_ANALYSIS_AI_TIMEOUT` | `900` | Leerlaufgrenze eines gestreamten Analyse-Aufrufs in Sekunden |
+| `JOURNAL_ANALYSIS_AI_MAX_DURATION` | `3600` | Gesamtdauer eines Analyse-Aufrufs in Sekunden |
+| `JOURNL_DB_ENABLED` | `false` | PostgreSQL-Suchindex und DB-Dienste aktivieren (Markdown bleibt Quelle) |
+| `JOURNL_DB_STORAGE_PREFIX` | `prod-user` | Root-Key-Präfix der DB-Spiegelung |
+| `JOURNL_DB_LOCK_DIR` | `/docker-storage/my_Journal_lock_data` | Host-Verzeichnis für Locks der DB-Dienste, außerhalb von `DATA_DIR` |
+| `QDRANT_URL` | — | Interne Adresse der Vektor-DB für die semantische Suche (z. B. `http://qdrant:6333`) |
+| `QDRANT_API_KEY` | — | Optionaler Schlüssel der Vektor-DB |
 | `WHISPER_API_KEY` | — | Erforderlicher API-Key für den privaten Whisper-Dienst |
 | `WHISPER_MODEL` | `base` | Mehrsprachiges lokales Whisper-Modell |
 | `WHISPER_COMPUTE_TYPE` | `int8` | CPU-schonender Berechnungstyp |
@@ -175,6 +194,41 @@ AI_TEMPLATE_0_TEMPERATURE=0.7
 AI_TEMPLATE_0_SYSTEM_PROMPT="Du bist ein hilfreicher Assistent."
 ```
 
+### Semantische Suche (optional)
+
+Für die semantische Suche braucht es eine erreichbare Qdrant-Instanz
+(`QDRANT_URL`, optional `QDRANT_API_KEY`) und einen Embedding-Endpunkt. Beides
+wird getrennt gepflegt: die Verbindung zum Embedding-Modell unter
+**Burger → Brain → Semantische Suche** (nur Administratoren), die persönliche
+Freigabe und Quellenauswahl ebenda pro Konto. Qdrant ist rebuildbar; ein
+Verlust kostet nur einen Neuaufbau aus den Markdown-Dateien.
+
+Die mitgelieferten Compose-Dateien starten Qdrant als eigenen Dienst (`qdrant`
+bzw. `qdrant-dev`, ohne Port nach außen) und setzen `QDRANT_URL` für App und
+Tagging-Scheduler. Erprobt ist `Qwen3-Embedding-4B` über llama-swap; die
+Vektoren werden clientseitig auf 1024 Dimensionen gekürzt. Laufen Embedding-
+und Chat-Modell auf demselben Rechner, muss das Embedding-Profil in einer
+Gruppe liegen, die das Chat-Modell nicht verdrängt; der Hinweis dazu steht
+direkt unter der Modellauswahl.
+
+Bedienung:
+
+- **Brain-Tab:** Sortierung „Relevanz (Wort + Bedeutung)“ — erst erscheinen die
+  Worttreffer, dann die gemischte Rangfolge. Karten tragen „ähnlich“ bzw.
+  „Wort + Bedeutung“. Hat man inzwischen gescrollt, springt nichts; ein Knopf
+  „Nach Relevanz ordnen“ übernimmt die neue Reihenfolge.
+- **„Ähnliche Einträge“** im „⋯“-Menü jeder Karte: verwandte Blöcke über den
+  gespeicherten Vektor, ohne Modellaufruf.
+- **Chat with your Notes:** Schalter „Bedeutungssuche“ — aus heißt reine
+  Wortsuche, an gibt dem Chat zusätzlich `semantic_search`/`find_similar`.
+- **MCP:** `semantic_search` und `find_similar` auf `/mcp/privat` und
+  `/mcp/family`, jeweils strikt im eigenen Bereich.
+- **Nachtlauf:** Uhrzeit, Batchgröße und Mindestähnlichkeit in den Settings;
+  „Jetzt abgleichen“ und „Komplett neu aufbauen“ für Admins. Eingebettet wird
+  nur Neues oder Geändertes.
+- **Messen:** `scripts/semantic-eval.py --user <name>` gibt Recall@k, Hit@k und
+  MRR je Modus aus — nur Zahlen, nie Inhalte.
+
 ### config.json
 
 Die Datei liegt persistent im Datenverzeichnis neben `users.json` (im Container
@@ -200,6 +254,12 @@ Journaleinträge werden im Volume-Pfad gespeichert (standardmäßig `/app/data` 
     write_sessions/<session-id>/media/<media-id>/original.m4a
     .share-jobs/<share-id>/metadata.json
     2026/06/06/media/Sprachi/<zeit>_<share-id>_audio.m4a
+    screensaver/ordner/<ordner>/          # private Bild- und Musikordner
+    screensaver/player.json               # Wiedergabestand, Abos und Sender
+  family/
+    shopping-history/<projekt-id>.json    # Kaufhistorie je Einkaufsliste
+  semantic-search.json                    # globale Embedding-Verbindung
+  cache/screensaver/                      # rebuildbarer Audio-, Podcast- und Bild-Cache
 ```
 
 Einträge sind durch `___` getrennt. Backups werden als `.md.bak` im jeweiligen Tages-Unterordner `_Backup/` erstellt.
@@ -315,6 +375,8 @@ Schreibziel konfiguriert werden — siehe
 ## Automatisierung
 
 - [Family Scheduler](scripts/README_scheduler.md) — interner Compose-Service für wiederkehrende Familienaufgaben
+- Tagging-Scheduler — Compose-Service für den stündlich geprüften Hashtag-Nachtrag und den semantischen Nachtlauf (`scripts/tagging-scheduler.py`)
+- Journal-Analyse-Scheduler — führt geplante Analysen und Pushover-Meldungen aus (`scripts/journal-analysis-scheduler.py`, Datenbank-Profil)
 - [Local Whisper](scripts/README_whisper.md) — privater CPU-Dienst, Initialisierung, API und täglicher Transkriptionslauf
 - [External Journal Monitor](scripts/README_journal_monitor.md) — hostseitiger Cron-Job für explizite Agentenaufträge; nicht Bestandteil des Containers
 - [Host-Worker auf einem zweiten Rechner](scripts/README_host_pi_worker.md) — führt Agentenaufträge außerhalb des Containers aus
@@ -335,7 +397,10 @@ Schnittstellen stehen in [docs/features/](docs/features/).
 | Heute | `GET /api/dashboard`, `POST /api/dashboard/edit` | Einträge des Tages lesen und ändern | Session (+ CSRF beim Schreiben) |
 | Historie | `GET /api/journals/<datum>/history` | Frühere Fassungen ansehen und wiederherstellen | Session (+ CSRF beim Schreiben) |
 | Brain | `GET /api/brain/search`, `POST /api/brain/index/rebuild` | Volltextsuche, Aufgaben, Tags, Index-Rebuild | Session (+ CSRF beim Schreiben) |
+| Semantische Suche | `GET /api/brain/semantic/search`, `/cards`, `/similar`, `POST /api/brain/semantic/index/run` | Hybride Suche (roh bzw. als Brain-Karten), ähnliche Einträge, Indexlauf; Einstellungen unter `/api/brain/semantic/settings*` | Session (+ CSRF beim Schreiben) |
 | Brain-Chat | `POST /api/brain/chat/ask` | Frage an die eigenen Journale | Session + CSRF |
+| Journal-Analyse | `/api/journal-analysis/*` | Jobs, Läufe, Protokoll und Hinweise | Session (+ CSRF beim Schreiben) |
+| Benachrichtigungen | `/api/pushover/*` | Pushover-Konto, Ruhezeit und Testnachricht | Session + CSRF |
 | Familie | `GET /api/family/board`, `POST /api/family/project*` | Board, Buckets, Aufgaben, Einkaufslisten | Session (+ CSRF beim Schreiben) |
 | Planner | `/api/family/planner` | Wiederkehrende Aufgaben; Format in [README_scheduler.md](scripts/README_scheduler.md) | Session (+ CSRF beim Schreiben) |
 | Sammelmappen | `/api/buckets/*` | Themenmappen und Tagesablage | Session (+ CSRF beim Schreiben) |

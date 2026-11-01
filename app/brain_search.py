@@ -157,6 +157,9 @@ def _serialise_result(document, block, user_id=None):
         "tags": sorted(set(block.get("tags", [])) | set(block.get("ai_tags", []))),
         "ai_tags": block.get("ai_tags", []),
         "manual_tags": block.get("manual_tags", []),
+        # The hashtag editor shows these as fixed: they live in the text and
+        # change only there.
+        "text_tags": block.get("tags_auto", []),
         "priority": block.get("priority", "normal"),
         "project": block.get("project", ""),
         "read_only": document.get("read_only", False),

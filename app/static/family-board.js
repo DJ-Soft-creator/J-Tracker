@@ -418,9 +418,54 @@
         .some(value => (value || '').toLowerCase().includes(query));
     }
 
+    // Erledigt, aber noch nicht archiviert (bis zu sieben Tage): oben im
+    // Archiv mit „Zurücksetzen“. Kommt mit dem Board vom Server und
+    // uebersteht damit Tab-Wechsel und Neustart.
+    function familyRecentlyCompletedHtml(query) {
+      const items = (familyBoard.data?.recently_completed || []).filter(item => familyArchiveMatches(
+        { title: item.title, project_id: item.origin_id, completed_by_display: item.completed_by_display }, query));
+      if (!items.length) return '';
+      const rows = items.map(item => {
+        const meta = [item.origin_title, item.completed_by_display, familyArchiveDay(item.completed_at)]
+          .filter(Boolean).map(escapeHtml).join(' · ');
+        return `<div class="flex items-start gap-2 px-3 py-2">
+          <div class="min-w-0 flex-1">
+            <div class="text-[15px] text-gray-300 line-through decoration-gray-600 break-words">${escapeHtml(item.title)}</div>
+            <div class="mt-0.5 text-xs text-gray-500">${meta}</div>
+          </div>
+          <button type="button" onclick="familyBoardReopenTask('${escapeHtmlAttr(item.origin_id || '')}','${escapeHtmlAttr(item.id || '')}',this)"
+                  class="shrink-0 rounded-md border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:border-green-600 hover:text-green-400 disabled:opacity-50">Zurücksetzen</button>
+        </div>`;
+      }).join('');
+      return `<section class="mb-4">
+        <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Zuletzt erledigt</h3>
+        <div class="divide-y divide-gray-800 rounded-xl border border-gray-800 bg-gray-900">${rows}</div>
+      </section>`;
+    }
+
+    async function familyBoardReopenTask(projectId, taskId, button) {
+      if (button) button.disabled = true;
+      try {
+        const res = await apiFetch('/api/family/task/check', {
+          method: 'POST',
+          body: JSON.stringify({ project_id: projectId, task_id: taskId, completed: false })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Zurücksetzen fehlgeschlagen');
+        showToast('Wieder offen');
+        await loadFamily();
+        window.checkFamilyNotifications?.();
+      } catch (error) {
+        if (button) button.disabled = false;
+        showToast(error.message || 'Netzwerkfehler', true);
+      }
+    }
+    window.familyBoardReopenTask = familyBoardReopenTask;
+
     function renderFamilyArchive(container, scope, query) {
+      const recent = familyRecentlyCompletedHtml(query);
       if (familyBoard.archive === null) {
-        container.innerHTML = '<p class="text-gray-500 text-center mt-8">Lade…</p>';
+        container.innerHTML = recent + '<p class="text-gray-500 text-center mt-8">Lade…</p>';
         return;
       }
       // Neueste zuerst: ein Archiv liest man von hinten.
@@ -429,11 +474,11 @@
         .slice()
         .sort((a, b) => String(b.completed_at || '').localeCompare(String(a.completed_at || '')));
       if (!items.length) {
-        container.innerHTML = `<p class="text-gray-500 text-center mt-8">${escapeHtml(query ? 'Keine Treffer.' : scope.empty)}</p>`;
+        container.innerHTML = recent + `<p class="text-gray-500 text-center mt-8">${escapeHtml(query ? 'Keine Treffer.' : scope.empty)}</p>`;
         return;
       }
       const icon = (name, size) => window.journlIcon?.(name, size) || '';
-      container.innerHTML = items.map(item => {
+      container.innerHTML = recent + items.map(item => {
         const person = item.completed_by_display || item.user_display || '';
         const meta = [];
         meta.push(`<span class="inline-flex items-center gap-1 align-middle">${icon('folder', 'h-3 w-3')}${escapeHtml(familyArchiveProjectTitle(item))}</span>`);

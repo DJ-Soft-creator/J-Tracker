@@ -188,9 +188,44 @@ function watchTaggingRun(run, { reset = false } = {}) {
   pollTaggingRun();
 }
 
-// Beim Oeffnen der Steuerung: laeuft noch etwas, wird es uebernommen statt
-// verschwiegen. Genau das war der Grund fuer den ganzen Umbau.
+// ─── Verbindung und Job ─────────────────────────────────────────────
+// Endpunkt, Modell, Zeitplan, Meldungen und das Protokoll pflegt der Job
+// „Hashtags nachtragen“ in der Journal-Analyse-Verwaltung
+// (journal-analysis-tagging.js). Hier steht nur, womit ein Handlauf rechnet.
+function applyTaggingRunAvailability(configured) {
+  const button = brainElement('brain-tag-run');
+  if (button && !taggingRun.active) button.disabled = !configured;
+}
+
+async function loadTaggingSettings() {
+  const line = brainElement('brain-tag-connection');
+  try {
+    const response = await apiFetch('/api/brain/tagging/settings', { cache: 'no-store' });
+    const data = response.ok ? await response.json() : {};
+    applyTaggingRunAvailability(!!data.configured);
+    if (!line) return;
+    if (!data.configured) {
+      line.textContent = 'Noch keine Verbindung – bitte in der Verwaltung einrichten.';
+      line.className = 'min-w-0 flex-1 text-amber-300';
+      return;
+    }
+    let host = data.base_url;
+    try { host = new URL(data.base_url).host; } catch { /* Rohwert zeigen */ }
+    const schedule = data.enabled && data.schedule_mode !== 'manual'
+      ? (window.JournlAnalysisSchedule?.scheduleLabel(data) || 'Zeitplan aktiv') : 'kein Zeitplan';
+    line.textContent = `${data.model} · ${host} · ${schedule}`;
+    line.className = 'min-w-0 flex-1 text-gray-400';
+  } catch {
+    if (line) line.textContent = 'Kein Kontakt zum Server.';
+  }
+}
+
+brainElement('brain-tag-manage')?.addEventListener('click', () => {
+  window.openSettingsGroup?.('analysis', 'Journal Analyse Verwaltung');
+});
+
 async function attachTaggingRun() {
+  await loadTaggingSettings();
   try {
     const response = await apiFetch(`/api/runs?kind=${TAGGING_RUN_KIND}`, { cache: 'no-store' });
     if (!response.ok) return;
@@ -229,7 +264,7 @@ async function runHistoricalTagging() {
     const response = await apiFetch('/api/brain/tagging/start', {
       method: 'POST',
       body: JSON.stringify({
-        start_date: start, end_date: end, provider_id: brainElement('brain-tag-provider').value,
+        start_date: start, end_date: end,
         mode, stale_before: staleBefore, preview,
       }),
     });

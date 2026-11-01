@@ -17,8 +17,13 @@ import db  # noqa: E402
 from document_store import configured_document_store  # noqa: E402
 
 
+def _storage_prefix():
+    """Root-Key-Prefix: PROD-Spiegel nutzt 'prod-user', DEV bleibt bei 'dev-user'."""
+    return os.environ.get("JOURNL_DB_STORAGE_PREFIX", "dev-user").strip()
+
+
 def dev_user_roots(data_dir):
-    """Return only canonical UUID user roots used by the DEV shadow importer."""
+    """Return only canonical UUID user roots used by the shadow importer."""
     data_root = Path(data_dir)
     if data_root.is_symlink() or not data_root.is_dir():
         raise RuntimeError("DATA_DIR ist kein zulaessiger Datenroot")
@@ -30,7 +35,7 @@ def dev_user_roots(data_dir):
             uuid.UUID(candidate.name)
         except ValueError:
             continue
-        result["dev-user-" + candidate.name] = candidate.resolve(strict=True)
+        result[_storage_prefix() + "-" + candidate.name] = candidate.resolve(strict=True)
     return result
 
 

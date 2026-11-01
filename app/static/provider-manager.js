@@ -59,6 +59,8 @@
       model: item.model || '',
       max_tokens: item.max_tokens == null ? '' : item.max_tokens,
       temperature: item.temperature == null ? '' : item.temperature,
+      thinking_budget: item.thinking_budget == null ? '' : item.thinking_budget,
+      journal_analysis: item.journal_analysis === true,
       has_key: !!item.has_key,
       env_managed: item.env_managed || [],
       // Nur was hier drinsteht, geht als Schluessel an den Server. Leer
@@ -86,6 +88,8 @@
           model: item.model,
           max_tokens: item.max_tokens === '' ? null : item.max_tokens,
           temperature: item.temperature === '' ? null : item.temperature,
+          thinking_budget: item.thinking_budget === '' ? null : item.thinking_budget,
+          journal_analysis: item.journal_analysis === true,
         };
         if (item.new_key !== null) out.api_key = item.new_key;
         return out;
@@ -165,7 +169,15 @@
           { locked: isManaged('max_tokens'), placeholder: '10000' })}
         ${field(index, 'temperature', 'Temperatur (optional)', item.temperature,
           { locked: isManaged('temperature'), placeholder: '0.7' })}
+        ${field(index, 'thinking_budget', 'Denk-Budget in Token (optional)', item.thinking_budget,
+          { locked: isManaged('thinking_budget'), placeholder: '4000',
+            hint: 'Für Reasoning-Modelle (llama.cpp): danach muss das Modell antworten. Die Token-Grenze muss größer sein.' })}
       </div>
+      ${String(item.id || '').startsWith('lm_') ? '' : `
+      <label class="mt-2 flex items-start gap-2 text-[11px] text-gray-400">
+        <input type="checkbox" data-provider-field="journal_analysis" data-provider-index="${index}"${item.journal_analysis ? ' checked' : ''} class="mt-0.5 accent-amber-500" />
+        <span>Für die Journal-Analyse freigeben — dann dürfen Analyse-Jobs diesen Cloud-Anbieter wählen, und deren Journalinhalte gehen an ihn (nur über HTTPS).</span>
+      </label>`}
       ${envNote}
     </li>`;
   }
@@ -223,6 +235,7 @@
     if (!item) return;
     const name = input.dataset.providerField;
     if (name === 'api_key') item.new_key = input.value;
+    else if (input.type === 'checkbox') item[name] = input.checked;
     else item[name] = input.value;
     markDirty();
   }
@@ -234,8 +247,8 @@
     const add = event.target.closest('[data-provider-add]');
     if (add) {
       state.providers.push({
-        id: '', label: '', api_url: '', model: '', max_tokens: '', temperature: '',
-        has_key: false, env_managed: [], new_key: null, is_new: true,
+        id: '', label: '', api_url: '', model: '', max_tokens: '', temperature: '', thinking_budget: '',
+        journal_analysis: false, has_key: false, env_managed: [], new_key: null, is_new: true,
       });
       state.dirty = true;
       render();

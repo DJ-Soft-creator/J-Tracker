@@ -61,6 +61,16 @@ def _catalog_default():
         "aliases": {},
         "proposals": [],
         "blocked": [],
+        # Vorschlaege, die in der Hashtag-Map nicht mehr angeboten werden. Der
+        # Hashtag selbst bleibt nutzbar - anders als ``blocked``.
+        "map_hidden": [],
+        # Hashtags, die die Map gar nicht zeigt (z. B. ein Sammel-Hashtag wie
+        # #info). Wirkt nur auf die Map, nicht auf Suche oder Freigabe.
+        "map_excluded": [],
+        # Hashtags, die der Nachpflege-Lauf nie vergibt - fuer alle Eintraege,
+        # anders als das ``ai_rejected`` eines einzelnen Blocks. Von Hand
+        # geschrieben bleiben sie nutzbar.
+        "ai_excluded": [],
         "ai_workflows": {},
         "knowledge_sources": {},
         "write_targets": {},
@@ -117,6 +127,9 @@ def _write_catalog(user_id, family, updater):
         }
         catalog["proposals"] = sorted({normalise_tag(tag) for tag in catalog["proposals"] if normalise_tag(tag)})
         catalog["blocked"] = sorted({normalise_tag(tag) for tag in catalog.get("blocked", []) if normalise_tag(tag)})
+        catalog["map_hidden"] = sorted({normalise_tag(tag) for tag in catalog.get("map_hidden", []) if normalise_tag(tag)})
+        catalog["map_excluded"] = sorted({normalise_tag(tag) for tag in catalog.get("map_excluded", []) if normalise_tag(tag)})
+        catalog["ai_excluded"] = sorted({normalise_tag(tag) for tag in catalog.get("ai_excluded", []) if normalise_tag(tag)})
         catalog["ai_workflows"] = {
             normalise_tag(tag): workflow
             for tag, workflow in catalog.get("ai_workflows", {}).items()
@@ -159,6 +172,15 @@ def propose_tags(user_id, tags, family=False):
         return added
 
     return _write_catalog(user_id, family, update)
+
+
+def ai_excluded_tags(user_id):
+    """Die Hashtags, die ein Modell diesem Nutzer nie vergeben darf.
+
+    Globale Ebene ueber dem ``ai_rejected`` eines Blocks: gilt fuer jeden
+    Eintrag und jeden kuenftigen Nachpflege-Lauf.
+    """
+    return set(read_catalog(user_id).get("ai_excluded", []))
 
 
 def catalog_view(user_id):
@@ -206,6 +228,9 @@ def update_catalog(user_id, family, action, tag, target=""):
         aliases = dict(catalog["aliases"])
         proposals = set(catalog["proposals"])
         blocked = set(catalog.get("blocked", []))
+        hidden = set(catalog.get("map_hidden", []))
+        excluded = set(catalog.get("map_excluded", []))
+        ai_excluded = set(catalog.get("ai_excluded", []))
         if action == "approve":
             canonical.add(tag)
             proposals.discard(tag)
@@ -236,8 +261,23 @@ def update_catalog(user_id, family, action, tag, target=""):
             # Offer it again right away instead of waiting for the next journal
             # write to re-detect it.
             proposals.add(tag)
+        elif action == "map_hide":
+            hidden.add(tag)
+        elif action == "map_unhide":
+            hidden.discard(tag)
+        elif action == "map_exclude":
+            excluded.add(tag)
+        elif action == "map_include":
+            excluded.discard(tag)
+        elif action == "ai_exclude":
+            ai_excluded.add(tag)
+        elif action == "ai_include":
+            ai_excluded.discard(tag)
         else:
             raise ValueError("Unknown catalog action")
+        catalog["map_hidden"] = sorted(hidden)
+        catalog["map_excluded"] = sorted(excluded)
+        catalog["ai_excluded"] = sorted(ai_excluded)
         catalog["canonical"] = sorted(canonical)
         catalog["aliases"] = aliases
         catalog["proposals"] = sorted(proposals)
@@ -644,7 +684,7 @@ def journal_blocks(content, journal_date=None):
     return _legacy_blocks(body, journal_date) or _day_block(body, journal_date)
 
 
-def render_footer(blocks, catalogs, ai_tags=None, ai_run=None):
+def render_footer(blocks, catalogs, ai_tags=None, ai_run=None, ai_seen=None, ai_rejected=None):
     """Map every block to the hashtags the index may point at.
 
     Proposals count, not just approved tags: the footer feeds the hashtag index
@@ -658,7 +698,22 @@ def render_footer(blocks, catalogs, ai_tags=None, ai_run=None):
     when it last did so for this file. Both live beside ``blocks`` rather than in
     the block text, which is what lets a later run replace its own suggestions
     without ever touching a hashtag the user typed.
+
+    ``ai_seen`` lists the blocks a model has already classified, whether it gave
+    them a hashtag or not. That — not "carries some hashtag" — is what makes a
+    block done for the gap-fill run: an entry with one hashtag of the user's own
+    still has to reach the model once.
+
+    ``ai_rejected`` lists, per block, the hashtags the user took back from a
+    model. A later run must not hand them out again, and a rejected tag is never
+    recorded as machine origin, whatever the caller passes in ``ai_tags``.
     """
+    anchors = {block["anchor"] for block in blocks}
+    rejected = {
+        anchor: sorted({normalise_tag(tag) for tag in tags} - {""})
+        for anchor, tags in (ai_rejected or {}).items() if anchor in anchors
+    }
+    rejected = {anchor: tags for anchor, tags in rejected.items() if tags}
     mapped = {}
     for block in blocks:
         tags = sorted({filterable_tag(tag, catalogs) for tag in block["raw_tags"]} - {""})
@@ -666,7 +721,7 @@ def render_footer(blocks, catalogs, ai_tags=None, ai_run=None):
             mapped[block["anchor"]] = tags
     payload = {"blocks": mapped}
     machine = {
-        anchor: sorted({filterable_tag(tag, catalogs) for tag in tags} - {""})
+        anchor: sorted({filterable_tag(tag, catalogs) for tag in tags} - {""} - set(rejected.get(anchor, [])))
         for anchor, tags in (ai_tags or {}).items()
     }
     machine = {anchor: tags for anchor, tags in machine.items() if tags and anchor in mapped}
@@ -674,6 +729,11 @@ def render_footer(blocks, catalogs, ai_tags=None, ai_run=None):
         payload["ai"] = machine
     if ai_run:
         payload["ai_run"] = ai_run
+    seen = sorted({anchor for anchor in (ai_seen or []) if anchor in anchors})
+    if seen:
+        payload["ai_seen"] = seen
+    if rejected:
+        payload["ai_rejected"] = rejected
     payload = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
     return f'{FOOTER_START}\n<!--\n{payload}\n-->\n{FOOTER_END}\n'
 
@@ -694,6 +754,66 @@ def footer_ai_run(footer):
     """Return when a model last classified this file, or an empty string."""
     stamp = (footer or {}).get("ai_run")
     return stamp if isinstance(stamp, str) else ""
+
+
+def footer_ai_seen(footer):
+    """Return the block anchors a model has classified, or None for old footers.
+
+    ``None`` (not an empty list) marks a footer written before the field existed,
+    so a caller can fall back to the stamp instead of treating every block as new.
+    """
+    seen = (footer or {}).get("ai_seen")
+    if not isinstance(seen, list):
+        return None
+    return [anchor for anchor in seen if isinstance(anchor, str)]
+
+
+def footer_ai_rejected(footer):
+    """Return the hashtags the user took back from a model, per block anchor."""
+    rejected = (footer or {}).get("ai_rejected")
+    if not isinstance(rejected, dict):
+        return {}
+    return {
+        anchor: [tag for tag in tags if isinstance(tag, str)]
+        for anchor, tags in rejected.items()
+        if isinstance(anchor, str) and isinstance(tags, list)
+    }
+
+
+def reject_ai_tags(footer, anchors, tags):
+    """Take machine hashtags back from the given blocks, for good.
+
+    Returns the changed footer and the hashtags actually removed. A tag leaves
+    the block's footer entry and the ``ai`` map and is filed under
+    ``ai_rejected``, which is what keeps the next tagging run from assigning it
+    again. Only machine hashtags are touched: one the user typed into the text
+    is not in the ``ai`` map and comes back from the text on the next refresh
+    anyway.
+    """
+    wanted = {normalise_tag(tag) for tag in tags if isinstance(tag, str)} - {""}
+    footer = footer if isinstance(footer, dict) else {}
+    blocks = {
+        anchor: list(values) for anchor, values in (footer.get("blocks") or {}).items()
+        if isinstance(values, list)
+    }
+    machine = footer_ai_tags(footer)
+    rejected = footer_ai_rejected(footer)
+    removed = set()
+    for anchor in anchors:
+        hit = {tag for tag in machine.get(anchor, []) if normalise_tag(tag) in wanted}
+        if not hit:
+            continue
+        removed |= {normalise_tag(tag) for tag in hit}
+        blocks[anchor] = [tag for tag in blocks.get(anchor, []) if tag not in hit]
+        machine[anchor] = [tag for tag in machine[anchor] if tag not in hit]
+        rejected[anchor] = sorted(set(rejected.get(anchor, [])) | {normalise_tag(tag) for tag in hit})
+    updated = {
+        **footer,
+        "blocks": blocks,
+        "ai": {anchor: values for anchor, values in machine.items() if values},
+        "ai_rejected": rejected,
+    }
+    return updated, sorted(removed)
 
 
 def refresh_journal_footer(user_id, content, journal_date=None, existing_footer=None):
@@ -719,6 +839,7 @@ def refresh_journal_footer(user_id, content, journal_date=None, existing_footer=
     # model's hashtags into the user's own.
     return normalized + render_footer(
         blocks, catalogs, footer_ai_tags(existing_footer), footer_ai_run(existing_footer),
+        footer_ai_seen(existing_footer), footer_ai_rejected(existing_footer),
     )
 
 

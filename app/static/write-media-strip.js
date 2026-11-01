@@ -49,6 +49,10 @@
         + transcriptButton(item, openTranscript);
     }
     const failed = item.transcription_status === 'error';
+    // Sternchen-Mikrofon (engine=voice): nur MacMini. Altes Mikrofon: nur Whisper.
+    if (item.engine === 'voice') {
+      return `<button type="button" data-transcribe-voice="${escapeHtml(item.id)}" class="mt-1 block ${failed ? 'text-amber-400' : 'text-green-400'} hover:underline">${failed ? 'MacMini fehlgeschlagen – erneut versuchen' : 'Mit MacMini transkribieren'}</button>`;
+    }
     const label = failed ? 'Transkription fehlgeschlagen – erneut versuchen' : 'Transkribieren';
     return '<select data-whisper-model aria-label="Modell für die Transkription" class="mt-1 block w-44 max-w-[50vw] rounded border border-gray-700 bg-gray-800 px-1 py-0.5 text-xs text-gray-300"></select>'
       + `<button type="button" data-transcribe-media="${escapeHtml(item.id)}" class="mt-1 block ${failed ? 'text-amber-400' : 'text-green-400'} hover:underline">${label}</button>`;
@@ -135,12 +139,18 @@
       if (!visible) { reader.innerHTML = ''; return; }
       const label = String(item.title || '').trim() || 'Sprachnachricht';
       const stored = persisted.some((candidate) => candidate.id === id);
+      // Die Sternchen-Aufnahme legt ihren Rohtext ab; im Feld steht dann
+      // meist schon der (verbesserte) Text, darum heisst er hier „Original“.
+      const heading = item.engine === 'voice' ? 'Original-Transkript' : 'Transkript';
+      const footer = stored ? 'Steht im Eintrag unter der Aufnahme.'
+        : item.transcript_inline ? 'Steht schon so im Text – wird nicht doppelt eingetragen.'
+          : 'Wird beim Senden unter die Aufnahme geschrieben.';
       reader.innerHTML = '<div class="flex items-start gap-2">'
-        + `<strong class="min-w-0 flex-1 truncate text-sm font-medium text-gray-200">Transkript: ${escapeHtml(label)}</strong>`
+        + `<strong class="min-w-0 flex-1 truncate text-sm font-medium text-gray-200">${heading}: ${escapeHtml(label)}</strong>`
         + '<button type="button" data-transcript-close class="shrink-0 rounded px-1 text-gray-500 hover:bg-gray-800 hover:text-gray-200" aria-label="Transkript schließen">×</button>'
         + '</div>'
         + `<div data-transcript-text class="mt-1 max-h-[30vh] overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-200">${escapeHtml(text)}</div>`
-        + `<span class="mt-1 block text-gray-500">${stored ? 'Steht im Eintrag unter der Aufnahme.' : 'Wird beim Senden unter die Aufnahme geschrieben.'}</span>`;
+        + `<span class="mt-1 block text-gray-500">${footer}</span>`;
     }
 
     function render(next = {}) {

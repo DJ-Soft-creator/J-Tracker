@@ -8,6 +8,9 @@ auf, führt den Workflow über den DB-nativen Pi-Host-Worker aus und schreibt
 dessen Antwort ins Journal. Der Schreiben-Tab und Schreibsessions sind an
 beiden Abläufen nicht beteiligt.
 
+> Kompakte, direkt an einen externen Agenten übergebbare Fassung (Senden und
+> Lesen): [`agent-journl-api.md`](agent-journl-api.md).
+
 ## 1. AI-Workflow einrichten
 
 Unter **Einstellungen → Share-API & AI-Workflows → AI-Workflows gestalten**

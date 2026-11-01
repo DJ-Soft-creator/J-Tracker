@@ -63,7 +63,14 @@
     })();
 
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+      // Die App-Version steht als data-app-version am <html>. Sie ist der
+      // Cache-Buster des Workers: ein neues Release installiert einen neuen
+      // Worker und der alte Cache wird beim Aktivieren geloescht.
+      window.addEventListener('load', () => {
+        const version = document.documentElement.dataset.appVersion;
+        const path = version ? `/sw.js?v=${encodeURIComponent(version)}` : '/sw.js';
+        navigator.serviceWorker.register(path).catch(() => {});
+      });
     }
 
     function showLogin() {

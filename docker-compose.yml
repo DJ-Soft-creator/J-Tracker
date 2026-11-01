@@ -25,6 +25,7 @@ services:
       - JOURNL_DB_LOCK_ROOT=/runtime-locks
       - TICKETS_DIR=/app/tickets
       - WHISPER_URL=http://whisper:8090
+      - QDRANT_URL=http://qdrant:6333
     user: "1000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4098/api/health')"]
@@ -48,6 +49,42 @@ services:
       - ENVIRONMENT=prod
     user: "1000"
     command: ["python", "/app/scripts/scheduler.py", "--loop"]
+
+  # Einmal taeglich den Vortag verschlagworten. Nur fuer Nutzer, die in den
+  # Brain-Einstellungen "Taeglich den Vortag" aktiviert und eine lokale
+  # Verbindung gespeichert haben.
+  tagging-scheduler:
+    build: .
+    image: journaling-tracker:latest
+    container_name: journl-tagging-scheduler-prod
+    restart: unless-stopped
+    env_file:
+      - ${JOURNL_ENV_FILE:-/docker-storage/my_Journal_data/data/journals/.env}
+    volumes:
+      - ${JOURNAL_DATA_DIR:-/docker-storage/my_Journal_data/data/journals/}:/app/data
+    environment:
+      - TZ=Europe/Berlin
+      - DATA_DIR=/app/data
+      - ENVIRONMENT=prod
+      - TAGGING_POLL_SECONDS=${TAGGING_POLL_SECONDS:-300}
+      # Der Nachtlauf der semantischen Suche haengt am selben Takt.
+      - QDRANT_URL=http://qdrant:6333
+    user: "1000"
+    command: ["python", "/app/scripts/tagging-scheduler.py", "--loop"]
+
+  # Vektor-DB der semantischen Suche. Nur im internen Netz, kein Port nach
+  # aussen, keine App-Geheimnisse (kein env_file); rebuildbar aus Markdown,
+  # deshalb ohne Backup. Leer (ohne Endpunkt/Modell in den Settings) kostet sie
+  # ~50 MB RAM. Soll ein Schluessel gesetzt werden: QDRANT__SERVICE__API_KEY
+  # hier und QDRANT_API_KEY in der App-.env.
+  qdrant:
+    image: qdrant/qdrant:v1.19.2-unprivileged
+    container_name: journl-qdrant-prod
+    restart: unless-stopped
+    environment:
+      - QDRANT__TELEMETRY_DISABLED=true
+    volumes:
+      - qdrant-prod-data:/qdrant/storage
 
   # This is deliberately opt-in.  A normal production code deployment remains
   # file-only until the operator explicitly selects the database profile and
@@ -102,6 +139,110 @@ services:
       - BUCKET_HOUR=${BUCKET_HOUR:-0}
     command: ["python", "/app/scripts/bucket-scheduler.py", "--loop"]
 
+  # Läuft nur mit dem Datenbank-Profil: ohne aktivierte DB tut der Dienst nichts.
+  journal-analysis-scheduler:
+    profiles: ["database"]
+    image: journaling-tracker:latest
+    container_name: journl-journal-analysis-scheduler-prod
+    restart: unless-stopped
+    env_file:
+      - ${JOURNL_ENV_FILE:-/docker-storage/my_Journal_data/data/journals/.env}
+    volumes:
+      - ${JOURNAL_DATA_DIR:-/docker-storage/my_Journal_data/data/journals/}:/app/data
+    environment:
+      - TZ=Europe/Berlin
+      - DATA_DIR=/app/data
+      - ENVIRONMENT=prod
+      - POSTGRES_HOST=postgres
+      - JOURNL_DB_LOCK_ROOT=/runtime-locks
+    depends_on: [journaling-tracker]
+    user: "1000"
+    command: ["python", "/app/scripts/journal-analysis-scheduler.py", "--loop"]
+
+  # DB-Spiegeldienste: halten den Index kontinuierlich mit den Journaldateien
+  # synchron (Import neuer Journale, Checkpoint-Promotion, Recovery und der
+  # nächtliche Cutover auf db_managed). Läuft nur mit dem Datenbank-Profil:
+  # ohne aktivierte DB (JOURNL_DB_ENABLED) tun die Skripte nichts.
+  db-shadow-scan:
+    profiles: ["database"]
+    image: journaling-tracker:latest
+    container_name: journl-db-shadow-scan-prod
+    restart: unless-stopped
+    env_file:
+      - ${JOURNL_ENV_FILE:-/docker-storage/my_Journal_data/data/journals/.env}
+    volumes:
+      - ${JOURNAL_DATA_DIR:-/docker-storage/my_Journal_data/data/journals/}:/app/data
+    environment:
+      - TZ=Europe/Berlin
+      - DATA_DIR=/app/data
+      - ENVIRONMENT=prod
+      - POSTGRES_HOST=postgres
+      - JOURNL_DB_STORAGE_PREFIX=${JOURNL_DB_STORAGE_PREFIX:-prod-user}
+    depends_on: [journaling-tracker]
+    user: "1000"
+    command: ["python", "/app/scripts/db-shadow-scan.py"]
+
+  db-checkpoint-scheduler:
+    profiles: ["database"]
+    image: journaling-tracker:latest
+    container_name: journl-db-checkpoint-scheduler-prod
+    restart: unless-stopped
+    env_file:
+      - ${JOURNL_ENV_FILE:-/docker-storage/my_Journal_data/data/journals/.env}
+    volumes:
+      - ${JOURNAL_DATA_DIR:-/docker-storage/my_Journal_data/data/journals/}:/app/data
+    environment:
+      - TZ=Europe/Berlin
+      - DATA_DIR=/app/data
+      - ENVIRONMENT=prod
+      - POSTGRES_HOST=postgres
+      - JOURNL_DB_STORAGE_PREFIX=${JOURNL_DB_STORAGE_PREFIX:-prod-user}
+    depends_on: [journaling-tracker]
+    user: "1000"
+    command: ["python", "/app/scripts/db-checkpoint-scheduler.py", "--loop"]
+
+  db-operation-recovery:
+    profiles: ["database"]
+    image: journaling-tracker:latest
+    container_name: journl-db-operation-recovery-prod
+    restart: unless-stopped
+    env_file:
+      - ${JOURNL_ENV_FILE:-/docker-storage/my_Journal_data/data/journals/.env}
+    volumes:
+      - ${JOURNAL_DATA_DIR:-/docker-storage/my_Journal_data/data/journals/}:/app/data
+      - ${JOURNL_DB_LOCK_DIR:-/docker-storage/my_Journal_lock_data}:/runtime-locks
+    environment:
+      - TZ=Europe/Berlin
+      - DATA_DIR=/app/data
+      - ENVIRONMENT=prod
+      - POSTGRES_HOST=postgres
+      - JOURNL_DB_STORAGE_PREFIX=${JOURNL_DB_STORAGE_PREFIX:-prod-user}
+      - JOURNL_DB_LOCK_ROOT=/runtime-locks
+    depends_on: [journaling-tracker]
+    user: "1000"
+    command: ["python", "/app/scripts/db-operation-recovery.py", "--loop"]
+
+  db-journal-cutover-scheduler:
+    profiles: ["database"]
+    image: journaling-tracker:latest
+    container_name: journl-db-journal-cutover-scheduler-prod
+    restart: unless-stopped
+    env_file:
+      - ${JOURNL_ENV_FILE:-/docker-storage/my_Journal_data/data/journals/.env}
+    volumes:
+      - ${JOURNAL_DATA_DIR:-/docker-storage/my_Journal_data/data/journals/}:/app/data
+    environment:
+      - TZ=Europe/Berlin
+      - DATA_DIR=/app/data
+      - ENVIRONMENT=prod
+      - POSTGRES_HOST=postgres
+      - JOURNL_DB_STORAGE_PREFIX=${JOURNL_DB_STORAGE_PREFIX:-prod-user}
+    depends_on: [journaling-tracker]
+    user: "1000"
+    # --since-days 2 = gestern + heute; alle 60 min, damit auch neue Tage
+    # desselben Tages zeitnah db_managed und DB-suchbar werden.
+    command: ["python", "/app/scripts/db-journal-cutover-scheduler.py", "--loop", "--since-days", "2", "--interval-seconds", "3600"]
+
   whisper-scheduler:
     profiles: ["whisper"]
     image: journaling-tracker:latest
@@ -124,3 +265,4 @@ services:
 volumes:
   whisper-models:
   postgres-prod-data:
+  qdrant-prod-data:

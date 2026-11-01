@@ -49,6 +49,77 @@ class ApplyToJournalTests(unittest.TestCase):
         whisper_scheduler._apply_to_journal("u1", self.item, {"text": text})
         return self.journal.read_text(encoding="utf-8")
 
+    def test_star_microphone_recordings_are_transcribed_by_the_macmini(self):
+        """Der regelmaessige Lauf nimmt sie mit - aber ueber den MacMini, nicht Whisper."""
+        import json
+        folder = self.data / "u1" / "2026" / "08" / "24" / "media" / "Sprachi"
+        folder.mkdir(parents=True)
+        for media_id, engine in ((MEDIA_ID, None), (OTHER_ID, "voice")):
+            (folder / f"a_{media_id}.wav").write_bytes(b"RIFF")
+            item = {"id": media_id, "user_id": "u1", "type": "audio", "status": "ready",
+                    "transcription_status": "pending", "original_name": f"a_{media_id}.wav"}
+            if engine:
+                item["engine"] = engine
+            (folder / f"a_{media_id}_metadata.json").write_text(json.dumps(item), encoding="utf-8")
+        with mock.patch.object(whisper_scheduler, "_call_whisper", return_value={"text": "whisper"}) as whisper, \
+             mock.patch.object(whisper_scheduler, "_call_voice", return_value={"text": "macmini"}) as voice:
+            report = whisper_scheduler.run()
+        self.assertEqual(report["completed"], 2)
+        self.assertEqual(whisper.call_count, 1)
+        self.assertEqual(voice.call_count, 1)
+        stored = json.loads((folder / f"a_{OTHER_ID}_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(stored["transcript_text"], "macmini")
+
+    def test_the_macmini_call_resolves_the_local_provider_from_the_raw_config(self):
+        import os
+        import voice
+        config = {"ai_providers": [{"id": "lm_mac", "api_url": "http://{locale_LLM_IP}:8080/v1/chat/completions"}],
+                  "voice": {"provider_id": "lm_mac", "asr_model": "voice-t"}}
+        with mock.patch.object(voice, "_raw_config", return_value=config), \
+             mock.patch.dict(os.environ, {"locale_LLM_IP": "192.168.1.20"}), \
+             mock.patch.object(voice, "transcribe", return_value="Hallo") as transcribe:
+            result = whisper_scheduler._call_voice(Path("/tmp/a.wav"))
+        self.assertEqual(result["text"], "Hallo")
+        self.assertEqual(transcribe.call_args.args[1], "http://192.168.1.20:8080/v1")
+        self.assertEqual(transcribe.call_args.args[2], "voice-t")
+
+    def test_a_model_list_in_whisper_model_means_its_first_entry(self):
+        """PROD 01.10.2026: WHISPER_MODEL=tiny,base,small,medium liess jeden Lauf scheitern."""
+        import ast
+        import os
+        with mock.patch.dict(os.environ, {"WHISPER_MODEL": "tiny,base,small,medium"}):
+            self.assertEqual(whisper_scheduler._default_model(), "tiny")
+        with mock.patch.dict(os.environ, {"WHISPER_MODEL": " , small"}):
+            self.assertEqual(whisper_scheduler._default_model(), "small")
+        # Der Dienst selbst (eigenes Image, faster-whisper hier nicht installiert):
+        source = (ROOT / "whisper_service" / "app.py").read_text(encoding="utf-8")
+        node = next(item for item in ast.parse(source).body
+                    if isinstance(item, ast.FunctionDef) and item.name == "_single_model")
+        namespace = {}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "app.py", "exec"), namespace)
+        self.assertEqual(namespace["_single_model"]("tiny,base,small,medium"), "tiny")
+        self.assertEqual(namespace["_single_model"]("medium"), "medium")
+        self.assertEqual(namespace["_single_model"](""), "base")
+        self.assertIn('MODEL_NAME = _single_model(os.environ.get("WHISPER_MODEL", "base"))', source)
+
+    def test_an_unreachable_service_stops_the_run_without_marking_errors(self):
+        import json
+        folder = self.data / "u1" / "2026" / "08" / "24" / "media" / "Sprachi"
+        folder.mkdir(parents=True)
+        for media_id in (MEDIA_ID, OTHER_ID):
+            (folder / f"a_{media_id}.webm").write_bytes(b"x")
+            (folder / f"a_{media_id}_metadata.json").write_text(json.dumps({
+                "id": media_id, "user_id": "u1", "type": "audio", "status": "ready",
+                "transcription_status": "error", "original_name": f"a_{media_id}.webm"}), encoding="utf-8")
+        with mock.patch.object(whisper_scheduler, "_call_whisper",
+                               side_effect=whisper_scheduler.ServiceUnavailable("Connection refused")) as call:
+            report = whisper_scheduler.run()
+        self.assertEqual(report, {"completed": 0, "errors": 0, "unavailable": True})
+        self.assertEqual(call.call_count, 1)  # nach dem ersten Versuch Schluss
+        for media_id in (MEDIA_ID, OTHER_ID):
+            stored = json.loads((folder / f"a_{media_id}_metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(stored["transcription_status"], "error")  # unveraendert
+
     def test_first_run_inserts_behind_the_media_label(self):
         self.journal.write_text("\n".join(["- 10:34:36", "", MARKER, "", LABEL, "", "~~24.08. 10:35:02~~", ""]), encoding="utf-8")
         updated = self.apply("Erste Fassung.")

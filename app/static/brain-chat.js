@@ -13,13 +13,26 @@
     // Die Wahrheit liegt trotzdem auf dem Server: jeder Turn landet in der
     // Chatdatei des Tages, damit ein geschlossener Browser nichts kostet.
     messages: [],
-    showSteps: false,
+    // Werkzeugaufrufe stehen eingeklappt unter jeder Antwort; der Menuepunkt
+    // blendet sie ganz aus. Die Wahl merkt sich das Geraet.
+    showSteps: (() => { try { return localStorage.getItem('journl.brain-chat.steps') !== '0'; } catch (_) { return true; } })(),
     settings: null,
     // Der laufende Serverauftrag und die Datei, an die er anhaengt.
     runId: '',
     runTimer: null,
     sessionPath: '',
+    // Ein noch laufendes Speichern der Quellen-Schalter. Die naechste Frage
+    // wartet darauf, sonst liefe sie mit dem alten Stand.
+    scopeSave: null,
   };
+
+  // Schalter fuer zusaetzliche Quellen; die Felder heissen wie in brain-chat.json.
+  const SCOPE_BUTTONS = {
+    include_projects: 'brain-chat-scope-projects', include_notes: 'brain-chat-scope-notes',
+    semantic_search: 'brain-chat-scope-semantic',
+  };
+  const SCOPE_ON = ['border-green-700/70', 'bg-green-900/30', 'text-green-300'];
+  const SCOPE_OFF = ['border-gray-700', 'bg-gray-800/60', 'text-gray-400'];
 
   const RUN_KIND = 'brain_chat_ask';
   const RUN_POLL_MS = 1500;
@@ -35,34 +48,84 @@
   }
 
   // ─── Verlauf zeichnen ──────────────────────────────────────────────
-  function stepLine(step) {
-    const parts = [step.tool];
-    const args = step.arguments && Object.keys(step.arguments).length
-      ? JSON.stringify(step.arguments) : '';
-    if (args) parts.push(args);
-    if (step.error) parts.push(`Fehler: ${step.error}`);
+  // Lesbare Namen der Journalwerkzeuge (mcp_tools.py); Unbekanntes bleibt roh.
+  const TOOL_LABELS = {
+    search: 'Suche', get_blocks: 'Blöcke lesen', list_tags: 'Hashtags auflisten',
+    list_days: 'Tage auflisten', get_day: 'Tag lesen',
+    list_projects: 'Projekte auflisten', get_project: 'Projekt lesen',
+    list_notes: 'Notes auflisten', get_note: 'Notiz lesen',
+  };
+  const ARG_KEYS = ['query', 'q', 'tag', 'tags', 'date', 'day', 'from', 'to', 'path', 'id', 'ids'];
+
+  function argText(value) {
+    if (Array.isArray(value)) return value.join(', ');
+    if (value && typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  }
+
+  // Die Kopfzeile eines Aufrufs: Werkzeug · Hauptargument · Ergebnis.
+  function stepHeadline(step) {
+    const parts = [TOOL_LABELS[step.tool] || step.tool];
+    const args = step.arguments || {};
+    const key = ARG_KEYS.find((name) => args[name] != null && args[name] !== '');
+    if (key) parts.push(`„${argText(args[key]).slice(0, 80)}“`);
+    if (step.error) parts.push('Fehler');
     else if (typeof step.count === 'number') parts.push(`${step.count} Treffer`);
-    if (Array.isArray(step.hits) && step.hits.length) parts.push(step.hits.join(', '));
+    else if (Array.isArray(step.hits)) parts.push(`${step.hits.length} Treffer`);
     if (step.truncated) parts.push('gekürzt');
     return parts.join(' · ');
   }
 
-  function stepsBlock(steps, truncated) {
+  // Ein Aufruf, einzeln aufklappbar: Kopfzeile, darunter alle Argumente und Treffer.
+  function stepItem(step) {
+    const item = document.createElement('details');
+    item.className = 'group rounded-md border border-gray-800/80 bg-gray-950/40';
+    const head = document.createElement('summary');
+    head.className = 'flex cursor-pointer list-none items-center gap-1.5 px-2 py-1 text-gray-400 hover:text-gray-200';
+    const chevron = document.createElement('span');
+    chevron.className = 'inline-block text-gray-600 transition-transform group-open:rotate-90';
+    chevron.textContent = '›';
+    const label = document.createElement('span');
+    label.className = step.error ? 'text-red-300/80' : '';
+    label.textContent = stepHeadline(step);
+    head.append(chevron, label);
+    item.appendChild(head);
+    const body = document.createElement('dl');
+    body.className = 'space-y-0.5 border-t border-gray-800/80 px-2 py-1.5 text-gray-500';
+    const row = (name, value) => {
+      const line = document.createElement('div');
+      const term = document.createElement('dt');
+      term.className = 'inline text-gray-600';
+      term.textContent = `${name}: `;
+      const text = document.createElement('dd');
+      text.className = 'inline break-words text-gray-400';
+      text.textContent = value;
+      line.append(term, text);
+      body.appendChild(line);
+    };
+    row('Werkzeug', step.tool);
+    Object.entries(step.arguments || {}).forEach(([name, value]) => row(name, argText(value)));
+    if (step.error) row('Fehler', step.error);
+    if (typeof step.total === 'number') row('insgesamt', String(step.total));
+    if (Array.isArray(step.hits) && step.hits.length) row('Treffer', step.hits.join(', '));
+    item.appendChild(body);
+    return item;
+  }
+
+  // Alle Aufrufe einer Antwort: eingeklappt, waehrend des Suchens offen (live).
+  function stepsBlock(steps, truncated, live) {
     if (!state.showSteps || !Array.isArray(steps) || !steps.length) return null;
     const details = document.createElement('details');
-    details.className = 'mt-2 text-[11px] text-gray-500';
-    details.open = true;
+    details.className = 'mt-2 text-[11px] text-gray-500 not-italic';
+    details.open = Boolean(live);
     const summary = document.createElement('summary');
-    summary.className = 'cursor-pointer text-gray-500 hover:text-gray-300';
-    summary.textContent = `Nachweise (${steps.length} Werkzeugaufrufe${truncated ? ', Recherche gekürzt' : ''})`;
+    summary.className = 'cursor-pointer select-none text-gray-500 hover:text-gray-300';
+    const tools = [...new Set(steps.map((step) => TOOL_LABELS[step.tool] || step.tool))].join(', ');
+    summary.textContent = `${steps.length} Werkzeugaufruf${steps.length === 1 ? '' : 'e'} · ${tools}${truncated ? ' · Recherche gekürzt' : ''}`;
     details.appendChild(summary);
-    const list = document.createElement('ul');
-    list.className = 'mt-1 space-y-0.5 break-words';
-    for (const step of steps) {
-      const item = document.createElement('li');
-      item.textContent = stepLine(step);
-      list.appendChild(item);
-    }
+    const list = document.createElement('div');
+    list.className = 'mt-1.5 space-y-1';
+    steps.forEach((step) => list.appendChild(stepItem(step)));
     details.appendChild(list);
     return details;
   }
@@ -84,7 +147,7 @@
     } else {
       box.textContent = entry.content;
     }
-    const steps = entry.pending ? null : stepsBlock(entry.steps, entry.truncated);
+    const steps = stepsBlock(entry.steps, entry.truncated, entry.pending);
     if (steps) box.appendChild(steps);
     wrap.appendChild(box);
     return wrap;
@@ -112,6 +175,47 @@
         ? `${state.settings.model} · ${state.settings.base_url}`
         : 'keine Verbindung konfiguriert';
     }
+    renderScopes();
+  }
+
+  function renderScopes() {
+    Object.entries(SCOPE_BUTTONS).forEach(([field, id]) => {
+      const button = byId(id);
+      if (!button) return;
+      const on = !!state.settings?.[field];
+      button.setAttribute('aria-pressed', on ? 'true' : 'false');
+      button.classList.remove(...(on ? SCOPE_OFF : SCOPE_ON));
+      button.classList.add(...(on ? SCOPE_ON : SCOPE_OFF));
+    });
+  }
+
+  // Sofort umlegen, dann speichern; schlaegt das fehl, springt der Schalter zurueck.
+  async function toggleScope(field) {
+    if (!state.settings) await loadSettings();
+    if (!state.settings) {
+      toast('Die Chat-Einstellungen sind nicht erreichbar.', true);
+      return;
+    }
+    const previous = !!state.settings[field];
+    state.settings = { ...state.settings, [field]: !previous };
+    renderScopes();
+    const save = (async () => {
+      try {
+        const response = await apiFetch('/api/brain/chat/settings', {
+          method: 'POST', body: JSON.stringify({ [field]: !previous }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Speichern fehlgeschlagen.');
+        state.settings = { ...state.settings, ...data };
+      } catch (error) {
+        state.settings = { ...state.settings, [field]: previous };
+        toast(error?.message || 'Netzwerkfehler beim Speichern.', true);
+      }
+      renderScopes();
+    })();
+    state.scopeSave = save;
+    await save;
+    if (state.scopeSave === save) state.scopeSave = null;
   }
 
   // ─── Oeffnen und schliessen ────────────────────────────────────────
@@ -153,10 +257,11 @@
     state.runTimer = null;
   }
 
-  function setPending(text) {
+  function setPending(text, steps) {
     const last = state.messages[state.messages.length - 1];
     if (last?.pending) {
       last.progress = text;
+      if (Array.isArray(steps)) last.steps = steps;
       render();
     }
   }
@@ -205,9 +310,11 @@
     }
     if (run.active) {
       const calls = run.progress?.tool_calls || 0;
+      // Das Lauf-Protokoll enthaelt jeden fertigen Werkzeugschritt: live zeigen.
+      const live = (run.log || []).filter((step) => step && typeof step === 'object' && step.tool);
       setPending(calls
         ? `Sucht in deinen Journalen … (${calls} Werkzeugaufrufe)`
-        : 'Sucht in deinen Journalen …');
+        : 'Sucht in deinen Journalen …', live);
       state.runTimer = setTimeout(pollRun, RUN_POLL_MS);
       return;
     }
@@ -279,6 +386,7 @@
     state.messages.push({ role: 'user', content: text });
     state.messages.push({ role: 'assistant', content: '', pending: true });
     render();
+    if (state.scopeSave) await state.scopeSave;
 
     const history = state.messages
       .filter((entry) => !entry.pending && !entry.error)
@@ -450,6 +558,9 @@
     if (typeof window.loadBrainCurrentMode === 'function') window.loadBrainCurrentMode();
   });
   byId('brain-chat-send')?.addEventListener('click', send);
+  Object.entries(SCOPE_BUTTONS).forEach(([field, id]) => {
+    byId(id)?.addEventListener('click', () => toggleScope(field));
+  });
   byId('brain-chat-input')?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -468,7 +579,8 @@
   byId('brain-chat-menu-discard')?.addEventListener('click', discardSession);
   byId('brain-chat-menu-steps')?.addEventListener('click', () => {
     state.showSteps = !state.showSteps;
-    toast(state.showSteps ? 'Nachweise werden angezeigt.' : 'Nachweise ausgeblendet.');
+    try { localStorage.setItem('journl.brain-chat.steps', state.showSteps ? '1' : '0'); } catch (_) { /* privat */ }
+    toast(state.showSteps ? 'Werkzeugaufrufe werden angezeigt.' : 'Werkzeugaufrufe ausgeblendet.');
     render();
   });
   byId('brain-chat-menu-settings')?.addEventListener('click', () => {

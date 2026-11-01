@@ -349,6 +349,7 @@ async function loadBrainResults() {
       setBrainIndexStatus(data.index_pending);
       if (data.tags) setBrainTags(data.tags, data.index_pending);
       renderBrainResults(data.results || [], data);
+      if (typeof brainSemanticRefine === 'function') brainSemanticRefine(params);
     }
   } catch {
     if (isCurrentBrainRequest(request)) {
@@ -398,7 +399,7 @@ async function loadMoreBrainResults(event) {
 // proposal never changes tag counts or Family tags, so those refreshes are
 // skipped instead of running four sequential requests per click.
 function catalogRefreshScope(payload) {
-  const proposalOnly = payload.action === 'block' || payload.action === 'unblock';
+  const proposalOnly = ['block', 'unblock', 'map_hide', 'map_unhide', 'map_exclude', 'map_include', 'ai_exclude', 'ai_include'].includes(payload.action);
   return { familyTags: !proposalOnly, brainTags: !proposalOnly };
 }
 
@@ -449,12 +450,29 @@ function proposalScopeBlock(scope, catalog, canManage) {
   }).join(' ') || '<span class="text-gray-600">Keine Vorschläge</span>';
   const blocked = (catalog.blocked || []).map((tag) => `<span class="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-gray-400">#${escapeHtml(tag)}${canManage ? ` <button type="button" data-tag-unblock="${escapeHtmlAttr(tag)}" data-tag-scope="${scope}" class="text-green-400 hover:text-green-300" title="Wieder als Vorschlag anzeigen">Wieder vorschlagen</button>` : ''}</span>`).join(' ') || '<span class="text-gray-600">Keine ignorierten Hashtags</span>';
   const title = scope === 'family' ? 'Family' : 'Persönlich';
-  return `<div class="space-y-2"><p class="text-xs font-medium text-gray-400">${title}</p><p class="text-xs text-gray-500">Offene Vorschläge</p><div class="flex flex-wrap gap-1">${proposals}</div><p class="pt-1 text-xs text-gray-500">Ignoriert</p><div class="flex flex-wrap gap-1">${blocked}</div></div>`;
+  // In der Hashtag-Map ausgeblendete Vorschlaege - der Hashtag bleibt nutzbar.
+  const hidden = scope === 'personal' && (catalog.map_hidden || []).length
+    ? `<p class="pt-1 text-xs text-gray-500">In der Hashtag-Map ausgeblendet</p><div class="flex flex-wrap gap-1">${catalog.map_hidden.map((tag) => `<span class="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-gray-400">#${escapeHtml(tag)}${canManage ? ` <button type="button" data-tag-map-unhide="${escapeHtmlAttr(tag)}" class="text-green-400 hover:text-green-300">Wieder einblenden</button>` : ''}</span>`).join(' ')}</div>`
+    : '';
+  // Ganz aus der Hashtag-Map genommene Hashtags (z. B. #info).
+  const excluded = scope === 'personal' && (catalog.map_excluded || []).length
+    ? `<p class="pt-1 text-xs text-gray-500">Nicht in der Hashtag-Map</p><div class="flex flex-wrap gap-1">${catalog.map_excluded.map((tag) => `<span class="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-gray-400">#${escapeHtml(tag)}${canManage ? ` <button type="button" data-tag-map-include="${escapeHtmlAttr(tag)}" class="text-green-400 hover:text-green-300">Wieder zeigen</button>` : ''}</span>`).join(' ')}</div>`
+    : '';
+  return `<div class="space-y-2"><p class="text-xs font-medium text-gray-400">${title}</p><p class="text-xs text-gray-500">Offene Vorschläge</p><div class="flex flex-wrap gap-1">${proposals}</div><p class="pt-1 text-xs text-gray-500">Ignoriert</p><div class="flex flex-wrap gap-1">${blocked}</div>${hidden}${excluded}</div>`;
 }
 
 
 function proposalsSection(catalog, canManagePersonal, canManageFamily) {
   return `<section class="bg-gray-900 border border-amber-900/50 rounded-xl p-4 space-y-3"><div><h3 class="font-medium text-amber-200">Vorschläge &amp; Ignorierte</h3><p class="text-xs text-gray-500">Jedes neu geschriebene Hashtag landet zuerst hier. „Ignorieren“ nimmt es dauerhaft aus allen künftigen Vorschlägen; über „Wieder vorschlagen“ kommt es zurück.</p></div>${proposalScopeBlock('personal', catalog.personal || {}, canManagePersonal)}${proposalScopeBlock('family', catalog.family || {}, canManageFamily)}</section>`;
+}
+
+
+// Global von der KI-Vergabe ausgeschlossene Hashtags.  Wirkt auf jeden
+// kuenftigen Nachpflege-Lauf; von Hand geschrieben bleiben sie nutzbar.
+function aiExcludedSection(catalog, canManage) {
+  const tags = (catalog.ai_excluded || []).map((tag) => `<span class="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-gray-400">#${escapeHtml(tag)}${canManage ? ` <button type="button" data-tag-ai-include="${escapeHtmlAttr(tag)}" class="text-red-400 hover:text-red-300" title="Wieder für die KI-Vergabe zulassen">×</button>` : ''}</span>`).join(' ') || '<span class="text-gray-600">Keine ausgeschlossenen Hashtags</span>';
+  const add = canManage ? `<form data-tag-ai-exclude-add class="flex flex-wrap gap-2 pt-2"><input data-tag-ai-exclude-tag required maxlength="80" placeholder="hashtag ohne #" class="min-w-56 flex-1 rounded bg-gray-800 border border-gray-700 px-2 py-1.5 text-sm text-gray-100" /><button class="rounded bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-600">Ausschließen</button></form>` : '';
+  return `<section class="bg-gray-900 border border-sky-900/60 rounded-xl p-4 space-y-3"><div><h3 class="font-medium text-sky-200">Ausgeschlossene Hashtags</h3><p class="text-xs text-gray-500">Diese Hashtags vergibt die KI beim Nachtragen nie – in keinem Eintrag und keinem Modus. Was ein früherer Lauf schon vergeben hat, fällt beim nächsten Lauf über den Tag weg. Von Hand geschrieben bleiben sie nutzbar.</p></div><div class="flex flex-wrap gap-1">${tags}</div>${add}</section>`;
 }
 
 
@@ -612,6 +630,7 @@ const CATALOG_SECTIONS = [
   { id: 'personal', label: 'Meine Hashtags', badge: (data) => (data.catalog?.personal?.canonical || []).length },
   { id: 'family', label: 'Family-Hashtags', badge: (data) => (data.catalog?.family?.canonical || []).length },
   { id: 'proposals', label: 'Vorschläge', badge: (data) => (data.catalog?.personal?.proposals || []).length + (data.catalog?.family?.proposals || []).length },
+  { id: 'ai_excluded', label: 'KI-Ausschluss', badge: (data) => (data.catalog?.personal?.ai_excluded || []).length },
   { id: 'ai', label: 'AI-Hashtags', badge: (data) => Object.keys(data.catalog?.ai || {}).length },
   { id: 'knowledge', label: 'Knowledge', badge: (data) => ['personal', 'family', 'host'].reduce((total, scope) => total + Object.keys(data.catalog?.knowledge?.[scope] || {}).length, 0) },
   { id: 'write_targets', label: 'Schreibziele', badge: (data) => ['personal', 'family', 'host'].reduce((total, scope) => total + Object.keys(data.catalog?.write_targets?.[scope] || {}).length, 0) },
@@ -638,6 +657,8 @@ function catalogSectionMarkup(data) {
       return tagCatalogSection('Family-Hashtags', 'family', catalog.family || {}, canFamily);
     case 'proposals':
       return proposalsSection(catalog, canPersonal, canFamily);
+    case 'ai_excluded':
+      return aiExcludedSection(catalog.personal || {}, canPersonal);
     case 'ai':
       return aiWorkflowSection(catalog.ai || {});
     case 'knowledge':
@@ -685,6 +706,15 @@ function bindCatalogTagControls(container, catalog) {
   container.querySelectorAll('[data-tag-remove-alias]').forEach((button) => run(button, () => ({ action: 'remove_alias', tag: button.dataset.tagRemoveAlias, scope: button.dataset.tagScope })));
   container.querySelectorAll('[data-tag-block]').forEach((button) => run(button, () => ({ action: 'block', tag: button.dataset.tagBlock, scope: button.dataset.tagScope })));
   container.querySelectorAll('[data-tag-unblock]').forEach((button) => run(button, () => ({ action: 'unblock', tag: button.dataset.tagUnblock, scope: button.dataset.tagScope })));
+  container.querySelectorAll('[data-tag-map-unhide]').forEach((button) => run(button, () => ({ action: 'map_unhide', tag: button.dataset.tagMapUnhide, scope: 'personal' })));
+  container.querySelectorAll('[data-tag-map-include]').forEach((button) => run(button, () => ({ action: 'map_include', tag: button.dataset.tagMapInclude, scope: 'personal' })));
+  container.querySelectorAll('[data-tag-ai-include]').forEach((button) => run(button, () => ({ action: 'ai_include', tag: button.dataset.tagAiInclude, scope: 'personal' })));
+  container.querySelector('[data-tag-ai-exclude-add]')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const tag = event.currentTarget.querySelector('[data-tag-ai-exclude-tag]').value.trim().replace(/^#/, '');
+    if (!tag) return;
+    try { await updateTagCatalog({ action: 'ai_exclude', tag, scope: 'personal' }); } catch (error) { showToast(error.message, true); }
+  });
   container.querySelectorAll('[data-tag-alias]').forEach((button) => button.addEventListener('click', async () => {
     const tag = window.prompt('Alias (ohne #):');
     const target = tag && window.prompt('Freigegebenes Ziel-Hashtag (ohne #):');

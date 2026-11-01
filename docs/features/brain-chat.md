@@ -17,6 +17,34 @@ Mehr sehen kann er dadurch nicht: `sources` steht fest auf `personal`, genau
 wie am Endpunkt. Familiendokumente sind nicht enthalten, auch dann nicht, wenn
 sie denselben Hashtag tragen. Geschrieben wird nie — alle Werkzeuge sind lesend.
 
+### Projekte und Notes einbeziehen
+
+Über der Eingabe liegen zwei Schalter, **Projekte einbeziehen** und **Notes
+einbeziehen**. Beide sind standardmäßig aus und werden pro Konto in
+`brain-chat.json` gespeichert (`include_projects`, `include_notes`); ein
+`POST /api/brain/chat/settings` mit nur einem Schalter ändert nur diesen.
+
+Der dritte Schalter **Bedeutungssuche** (`semantic_search`) entscheidet, ob der
+Chat nur mit der Wortsuche arbeitet oder zusätzlich mit dem Embedding-Modell
+sucht (`semantic_search`, `find_similar`, siehe [MCP-API](mcp-api.md)). Er ist
+nur sichtbar, solange die semantische Suche für das Konto an ist. Damit Chat-
+und Embedding-Modell gleichzeitig auf den Mac mini passen, im Chat
+`ArmyKnife2-t` oder `bonsai-code-t` wählen (Hinweis in den Settings).
+
+| Schalter | Zusätzliche Werkzeuge | Liefert |
+|---|---|---|
+| Projekte | `list_projects`, `get_project` | Titel, Quelle, offene/erledigte Aufgaben, Auszug; im Detail Freitext, Aufgaben mit Status/Zuständigem/Zieldatum und Kommentare |
+| Notes | `list_notes`, `get_note` | Titel, Quelle, Auszug; im Detail der Volltext (gedeckelt) |
+
+Gelesen werden die eigenen `projects/`- bzw. `notes/`-Dateien und die
+Familiendateien unter `family/projects/` bzw. `family/notes/`, die der Nutzer
+auch in der Brain-Ansicht sieht (dieselbe fail-closed-Prüfung: ungültiges
+Frontmatter heißt unsichtbar). `*.lock` und `*.sync-conflict-*` werden
+ignoriert. Jedes Ergebnis trägt `id`, `source` (Privat/Familie), `path` und
+`title`; ist ein Schalter an, verlangt der System-Prompt, Titel und Quelle zu
+nennen. Bei ausgeschalteten Schaltern sind Werkzeugliste und System-Prompt
+unverändert.
+
 ## 2. Verbindung einrichten
 
 **Einstellungen → Brain → Chat with your Notes**

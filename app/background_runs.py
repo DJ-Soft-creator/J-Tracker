@@ -40,6 +40,8 @@ MAX_LOG_ENTRIES = 500
 # Fertige Laeufe verschwinden von selbst; sie sind Statusanzeige, kein Archiv.
 RETENTION_DAYS = 7
 
+_PUBLIC_PARAMS = ("start_date", "end_date", "mode", "preview")
+
 _ID_RE = re.compile(r"^[0-9a-f-]{36}$")
 
 # Jeder Lauf bekommt seinen eigenen Thread, gedeckelt durch dieses Semaphor.
@@ -49,6 +51,8 @@ _ID_RE = re.compile(r"^[0-9a-f-]{36}$")
 MAX_CONCURRENT_RUNS = 4
 
 _handlers = {}
+_finish_hooks = {}
+_retention = {}
 _slots = threading.BoundedSemaphore(MAX_CONCURRENT_RUNS)
 
 
@@ -60,9 +64,19 @@ class RunConflict(RunError):
     """Fuer diesen Nutzer laeuft bereits ein Lauf derselben Art."""
 
 
-def register(kind, handler):
-    """Haenge die Arbeit einer Laufart ein: ``handler(handle, params) -> dict``."""
+def register(kind, handler, *, on_finish=None, retention_days=None):
+    """Haenge die Arbeit einer Laufart ein: ``handler(handle, params) -> dict``.
+
+    ``on_finish(record)`` laeuft einmal, sobald der Lauf endgueltig beendet ist —
+    auch wenn der Handler mit einem Fehler abbrach. Dort meldet ein Fachmodul,
+    was der Nutzer erfahren soll. ``retention_days`` ueberschreibt die
+    Aufbewahrung fuer Laufarten, deren Laeufe ein Protokoll sind.
+    """
     _handlers[kind] = handler
+    if on_finish is not None:
+        _finish_hooks[kind] = on_finish
+    if retention_days is not None:
+        _retention[kind] = int(retention_days)
 
 
 # ─── Ablage ───────────────────────────────────────────────────────────
@@ -147,6 +161,11 @@ def public_run(record, log_from=0):
         "kind": record.get("kind", ""),
         "label": record.get("label", ""),
         "status": record.get("status", ""),
+        "trigger": record.get("trigger", "manual"),
+        # Nie die Parameter selbst: sie koennen Anbieterkennungen enthalten.
+        # Zeitraum und Modus braucht das Protokoll, mehr nicht.
+        "scope": {key: value for key, value in (record.get("params") or {}).items()
+                  if key in _PUBLIC_PARAMS},
         "created_at": record.get("created_at", ""),
         "updated_at": record.get("updated_at", ""),
         "finished_at": record.get("finished_at", ""),
@@ -192,11 +211,16 @@ class RunHandle:
 
 
 # ─── Lebenszyklus ─────────────────────────────────────────────────────
-def start(user_id, kind, params, *, label=""):
+def start(user_id, kind, params, *, label="", trigger="manual", inline=False):
     """Reihe einen Lauf ein. Pro Nutzer und Art laeuft immer nur einer.
 
     Der Deckel ist keine Bequemlichkeit: zwei Verschlagwortungsläufe wuerden
     dieselben Journale gleichzeitig umschreiben.
+
+    ``inline`` arbeitet den Lauf im aufrufenden Thread ab und gibt den fertigen
+    Lauf zurueck. Das nutzt ein Sidecar ohne eigenen Arbeiter: sein Lauf landet
+    so im selben Protokoll wie einer, den der Nutzer gestartet hat. ``trigger``
+    sagt dem Protokoll, wer ihn ausgeloest hat (``manual`` oder ``schedule``).
     """
     if kind not in _handlers:
         raise RunError("Unbekannte Laufart: {}".format(kind))
@@ -210,8 +234,12 @@ def start(user_id, kind, params, *, label=""):
         "created_at": _now(), "updated_at": _now(), "finished_at": "",
         "progress": {}, "log": [], "log_offset": 0, "result": {},
         "error": "", "cancel_requested": False,
+        "trigger": trigger, "runner": "inline" if inline else "app",
     }
     _write(user_id, run_id, record)
+    if inline:
+        _run_one(user_id, run_id)
+        return _read(user_id, run_id) or record
     _spawn(user_id, run_id)
     return record
 
@@ -281,12 +309,13 @@ def listing(user_id, kind=None):
 
 
 def cleanup(user_id, now=None):
-    """Beendete Laeufe nach RETENTION_DAYS entfernen."""
-    limit = (now or datetime.now(timezone.utc)) - timedelta(days=RETENTION_DAYS)
+    """Beendete Laeufe nach RETENTION_DAYS (oder der Frist ihrer Art) entfernen."""
+    now = now or datetime.now(timezone.utc)
     removed = 0
     for record in _records(user_id):
         if record.get("status") in ACTIVE_STATUSES:
             continue
+        limit = now - timedelta(days=_retention.get(record.get("kind"), RETENTION_DAYS))
         stamp = record.get("finished_at") or record.get("updated_at") or ""
         try:
             finished = datetime.fromisoformat(stamp)
@@ -312,15 +341,25 @@ def _finish(user_id, run_id, status, *, result=None, error=""):
         if error:
             record["error"] = error
 
-    return _modify(user_id, run_id, change)
+    record = _modify(user_id, run_id, change)
+    hook = _finish_hooks.get((record or {}).get("kind"))
+    if hook is not None:
+        try:
+            hook(record)
+        except Exception:  # noqa: BLE001 - eine Meldung darf den Lauf nie nachtraeglich kippen
+            logger.exception("Finish hook of run %s failed", run_id)
+    return record
 
 
-def abort_stale_runs():
+def abort_stale_runs(runner="app"):
     """Nach einem Neustart gibt es keine laufenden Auftraege mehr.
 
     Ein Lauf, der als „laeuft" im Dateisystem stehen bleibt, blockiert sonst
     fuer immer den naechsten Start derselben Art — und die Oberflaeche wartet
     auf einen Fortschritt, den niemand mehr meldet.
+
+    Jeder Prozess raeumt nur seine eigenen Laeufe: startet die App neu, waehrend
+    ein Sidecar gerade verschlagwortet (``runner="inline"``), laeuft der weiter.
     """
     root = _core().DATA_DIR
     if not root.is_dir():
@@ -330,6 +369,8 @@ def abort_stale_runs():
         user_id = directory.parent.name
         for record in _records(user_id):
             if record.get("status") not in ACTIVE_STATUSES:
+                continue
+            if record.get("runner", "app") != runner:
                 continue
             _finish(user_id, record["id"], "aborted",
                     error="Die App wurde neu gestartet, der Auftrag wurde beendet.")

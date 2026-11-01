@@ -120,6 +120,20 @@ class AiProviderApiTests(unittest.TestCase):
         self.assertEqual(stored[0]["api_key"], "geheim-lokal")
         self.assertEqual(stored[0]["label"], "LM Studio neu")
 
+    def test_journal_analysis_approval_is_explicit_and_sticky(self):
+        """Ein Cloud-Anbieter bekommt Journalinhalte nur nach ausdruecklichem Haken."""
+        cloud = {"id": "cloud", "label": "Opus", "model": "anthropic/claude-opus",
+                 "api_url": "https://openrouter.ai/api/v1/chat/completions"}
+        self.put([cloud])
+        self.assertFalse(self.read_config()["ai_providers"][0]["journal_analysis"])
+        self.put([{**cloud, "journal_analysis": True}])
+        self.assertTrue(self.read_config()["ai_providers"][0]["journal_analysis"])
+        self.put([cloud])  # Feld fehlt -> bleibt
+        self.assertTrue(self.read_config()["ai_providers"][0]["journal_analysis"])
+        self.put([{**cloud, "journal_analysis": "ja"}])  # nur echtes true zaehlt
+        self.assertFalse(self.read_config()["ai_providers"][0]["journal_analysis"])
+        self.assertIn("journal_analysis", self.fetched()["shared"][0])
+
     def test_an_empty_key_field_clears_the_key(self):
         self.put([
             {"id": "lm", "label": "LM Studio", "model": "qwen", "api_key": "",
@@ -207,6 +221,23 @@ class AiProviderApiTests(unittest.TestCase):
              "temperature": 9},
         ])
         self.assertEqual(response.status_code, 400)
+
+    def test_thinking_budget_is_stored_and_validated(self):
+        self.put([
+            {"id": "lm", "label": "A", "model": "m", "api_url": "http://host:1/v1",
+             "thinking_budget": "4000"},
+        ])
+        self.assertEqual(self.read_config()["ai_providers"][0]["thinking_budget"], 4000)
+        response = self.put([
+            {"id": "lm", "label": "A", "model": "m", "api_url": "http://host:1/v1",
+             "thinking_budget": -1},
+        ])
+        self.assertEqual(response.status_code, 400)
+        self.put([
+            {"id": "lm", "label": "A", "model": "m", "api_url": "http://host:1/v1",
+             "thinking_budget": None},
+        ])
+        self.assertNotIn("thinking_budget", self.read_config()["ai_providers"][0])
 
     def test_optional_numbers_may_be_cleared(self):
         self.put([

@@ -115,7 +115,74 @@ def journal_day_blocks(user_id, start, end, limit=None):
     return blocks
 
 
+def _footer_anchors_for_block(document, block, footer, journal_date):
+    """The footer anchors whose machine hashtags this card shows.
+
+    Mirrors how ``_machine_tag_lookup`` attached them in the first place: every
+    spelling of the footer anchor, plus the whole-day anchor of an old journal,
+    which lands on the first block when no block is stamped with it.
+    """
+    anchors = [
+        anchor for anchor in tagging_module.footer_ai_tags(footer)
+        if block.get("stable_anchor") in _anchor_candidates(anchor)
+    ]
+    blocks = document.get("blocks", [])
+    day_anchor = f"{journal_date} 00:00:00" if journal_date else ""
+    if day_anchor and blocks and blocks[0]["fingerprint"] == block["fingerprint"]:
+        stamped = {item.get("stable_anchor") for item in blocks}
+        if not stamped & set(_anchor_candidates(day_anchor)) and day_anchor not in anchors:
+            anchors.append(day_anchor)
+    return anchors
+
+
+def reject_block_ai_tags(user_id, doc_id, fingerprint, tags):
+    """Take machine hashtags back from one journal block and keep them out.
+
+    The footer is the only place these hashtags exist, so it is rewritten
+    through the tagging module: the tags leave the block's entry and the ``ai``
+    map and land in ``ai_rejected``, which the next tagging run respects.
+    Returns ``(status, removed)`` with status ``ok``, ``not_found`` or
+    ``conflict`` (the block no longer resolves).
+    """
+    document, path, root, _ = _resolve_document(user_id, doc_id)
+    if not document or document["source"] != "personal" or document["kind"] != "journal" or document["read_only"]:
+        return "not_found", []
+    block = next((item for item in document["blocks"] if item["fingerprint"] == fingerprint), None)
+    if not block:
+        return "conflict", []
+    journal_date = tagging_module.journal_date_from_path(path)
+    with _index_guard("personal", user_id, exclusive=True):
+        def update(current):
+            body, footer = tagging_module.strip_footer(current)
+            if not footer:
+                return current, []
+            current_document = _build_document("personal", root, path, "journal", current) or document
+            current_block = next(
+                (item for item in current_document["blocks"] if item["fingerprint"] == fingerprint), None,
+            )
+            if not current_block:
+                return current, None
+            anchors = _footer_anchors_for_block(current_document, current_block, footer, journal_date)
+            changed, removed = tagging_module.reject_ai_tags(footer, anchors, tags)
+            if not removed:
+                return current, []
+            return tagging_module.refresh_journal_footer(
+                user_id, body, journal_date, existing_footer=changed,
+            ), removed
+
+        removed = update_text_file(path, update)
+        if removed is None:
+            return "conflict", []
+        if removed:
+            updated = _build_document("personal", root, path, "journal")
+            if updated:
+                _write_index_document("personal", updated, user_id)
+    if removed:
+        enqueue_rebuild(user_id)
+    return "ok", removed
+
+
 __all__ = [
     '_anchor_candidates', '_tag_reference_block', 'resolve_tag_block_references',
-    'journal_day_blocks',
+    'journal_day_blocks', 'reject_block_ai_tags',
 ]

@@ -269,6 +269,12 @@
     // den geraetespezifischen Modals haengen.
 
     async function checkFamilyTask(projectId, taskId, checkbox) {
+      // Rueckfrage nur beim Abhaken; zuruecksetzen geht ohne (auch spaeter im
+      // Archiv unter „Zuletzt erledigt“).
+      if (checkbox.checked && !window.confirm('Aufgabe als erledigt abhaken?')) {
+        checkbox.checked = false;
+        return;
+      }
       checkbox.disabled = true;
       try {
         const res = await apiFetch('/api/family/task/check', {
@@ -390,10 +396,15 @@
       writeShoppingCollapsed(projectId, collapsed);
     }
 
+    // Welche Liste das Vollbild gerade zeigt - der Sortieren-Knopf und das
+    // Neuladen nach dem Agenten brauchen sie.
+    let shoppingOpenId = '';
+
     async function openShopping(projectId) {
       const modal = document.getElementById('shopping-modal');
       const container = document.getElementById('shopping-container');
       const title = document.getElementById('shopping-title');
+      shoppingOpenId = projectId;
       modal.classList.remove('hidden');
       modal.classList.add('flex');
       container.innerHTML = '<p class="text-gray-500">Lade…</p>';
@@ -532,13 +543,16 @@
       if (mode === 'compact') {
         bulkLabel.textContent = 'Mehrere Artikel hinzufügen (einer pro Zeile):';
       } else {
-        bulkLabel.textContent = 'Mehrere Aufgaben hinzufügen (einer pro Zeile):';
+        bulkLabel.textContent = 'Mehrere Aufgaben – eine pro Zeile. Kurzformen: @Name, morgen, nächsten Mi, 12.10., in 3 Tagen, [x] erledigt. Wiederholung (jeden Fr, täglich, alle 2 Wochen, monatlich) → Planer';
       }
       document.getElementById('editor-bulk-extra').classList.toggle('hidden', mode === 'compact');
       modal.classList.remove('hidden');
       modal.classList.add('flex');
       listEl.innerHTML = '<p class="text-gray-500">Lade…</p>';
       bulkEl.value = '';
+      bulkEl.placeholder = mode === 'compact' ? 'Butter\nMehl\nZucker'
+        : 'Müll rausbringen @Kim morgen\nSteuer abgeben @Alex 12.10.\n[x] Arzttermin vereinbart';
+      window.journlFamilyQuickTasks?.renderPreview();
       document.getElementById('editor-bulk-date').value = '';
       try {
         const res = await apiFetch('/api/family/project/' + projectId + '/editor');
@@ -547,6 +561,9 @@
         editorState.users = data.users || [];
         renderEditorItems(data.tasks || [], data.mode || mode);
         renderEditorBulkUserSelect();
+        if (mode !== 'compact' && window.journlFamilyQuickTasks?.placeholder) {
+          bulkEl.placeholder = window.journlFamilyQuickTasks.placeholder(editorState.users);
+        }
       } catch {
         listEl.innerHTML = '<p class="text-red-400">Netzwerkfehler</p>';
       }
@@ -639,16 +656,25 @@
       });
       const bulkUser = editorState.mode === 'full' ? (document.getElementById('editor-bulk-user').value || '') : '';
       const bulkDate = editorState.mode === 'full' ? (document.getElementById('editor-bulk-date').value || '') : '';
-      for (const line of bulkEl.value.split('\n')) {
-        const t = line.trim();
-        if (t && !tasks.some(i => i.title.toLowerCase() === t.toLowerCase())) {
-          const task = { title: t, completed: false };
-          if (editorState.mode === 'full') {
-            task.user = bulkUser;
-            task.target_date = bulkDate;
-          }
-          tasks.push(task);
+      // Jede Zeile eine eigene Aufgabe mit eigener Person/Datum/Status
+      // (Kurzformen @Name, morgen, fr, 12.10., [x] - family-quick-tasks.js);
+      // die Vorgabe darunter gilt nur, wo eine Zeile nichts eigenes sagt.
+      const quick = window.journlFamilyQuickTasks?.parse(bulkEl.value, {
+        users: editorState.users, defaultUser: bulkUser, defaultDate: bulkDate, full: editorState.mode === 'full',
+      }) || bulkEl.value.split('\n').map(line => ({ title: line.trim(), completed: false, user: bulkUser, target_date: bulkDate }));
+      // Wiederholungen („jeden freitag“) gehen als Eintrag in den Planer.
+      const plans = quick.filter(item => item.recurrence);
+      const missing = plans.find(item => item.planError);
+      if (missing) { showToast(`Wiederholung „${missing.title}“: ${missing.planError} (@Name oder Vorgabe)`, true); return; }
+      for (const item of quick) {
+        if (item.recurrence) continue;
+        if (!item.title || tasks.some(i => i.title.toLowerCase() === item.title.toLowerCase())) continue;
+        const task = { title: item.title, completed: Boolean(item.completed) };
+        if (editorState.mode === 'full') {
+          task.user = item.user || '';
+          task.target_date = item.target_date || '';
         }
+        tasks.push(task);
       }
       try {
         const res = await apiFetch('/api/family/project/' + editorState.projectId + '/editor', {
@@ -656,7 +682,9 @@
           body: JSON.stringify({ tasks })
         });
         if (res.ok) {
-          showToast('Gespeichert');
+          const failed = plans.length ? await window.journlFamilyQuickTasks.createPlans(plans) : [];
+          if (failed.length) showToast('Nicht im Planer angelegt: ' + failed.join('; '), true);
+          else showToast(plans.length ? `Gespeichert, ${plans.length} im Planer` : 'Gespeichert');
           closeEditor();
           loadFamily();
           checkFamilyNotifications();
@@ -676,6 +704,18 @@
       if (e.target.id === 'editor-modal') closeEditor();
     });
     document.getElementById('shopping-close').addEventListener('click', closeShopping);
+    document.getElementById('shopping-sort')?.addEventListener('click', () => {
+      if (!shoppingOpenId) return;
+      const title = document.getElementById('shopping-title')?.textContent || '';
+      window.openShoppingAgent?.(shoppingOpenId, title);
+    });
+    // Hat der Agent die Liste umgebaut, zeigt das Vollbild darunter sonst den
+    // alten Stand bis zum naechsten Oeffnen.
+    document.addEventListener('journl:shopping-agent-closed', (event) => {
+      const modal = document.getElementById('shopping-modal');
+      if (!event.detail?.changed || !shoppingOpenId || modal?.classList.contains('hidden')) return;
+      if (event.detail.projectId === shoppingOpenId) openShopping(shoppingOpenId);
+    });
 
     // renderFamily lives in family-board.js, das erst nach diesem Script laedt -
     // ein direkter Verweis wuerde beim Registrieren sofort mit ReferenceError
@@ -707,7 +747,9 @@
     // ─── ESC handler ─────────────────────────────────────────────────
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        closeShopping();
+        // Liegt der Agent ueber dem Vollbild, bleibt das Vollbild darunter offen.
+        const agent = document.getElementById('shopping-agent');
+        if (!agent || agent.classList.contains('hidden')) closeShopping();
         closeEditor();
         closeSettings();
         if (burgerMenu) burgerMenu.classList.add('hidden');

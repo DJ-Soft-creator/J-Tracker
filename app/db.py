@@ -10,7 +10,7 @@ import threading
 from urllib.parse import quote_plus
 
 
-EXPECTED_SCHEMA_REVISION = "0010_agent_attachments"
+EXPECTED_SCHEMA_REVISION = "0015_analysis_last_days"
 
 _health_engine = None
 _health_engine_url = None

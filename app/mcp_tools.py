@@ -19,16 +19,21 @@ _core = sys.modules.get("main") or sys.modules.get("__main__")
 if _core is None:  # pragma: no cover - import order is a hard application invariant
     raise RuntimeError("main facade must exist before mcp_tools is imported")
 globals().update({name: getattr(_core, name) for name in dir(_core) if not name.startswith("__")})
-_DYNAMIC_NAMES = ('DATA_DIR', 'IS_DEV', 'database_url', 'is_enabled')
+_DYNAMIC_NAMES = ('DATA_DIR', 'database_url', 'is_enabled')
 
 import brain as brain_module
+import semantic_search
+import semantic_settings
 import tagging as tagging_module
+import vector_store
+from embeddings import EmbeddingError
 
 MAX_SEARCH_LIMIT = 100
 MAX_BLOCK_LIMIT = 200
 MAX_BLOCK_CHARS = 4000
 MAX_DAY_LIMIT = 366
 MAX_DAY_SPAN = 7
+MAX_SEMANTIC_LIMIT = 30
 
 from datetime import date as _DATE_TYPE
 
@@ -70,9 +75,9 @@ def _tag_list(tags):
 
 
 def search_available():
-    """Full-text search needs the Phase 9 DB index, which is DEV-gated."""
+    """Full-text search needs the Phase 9 DB index, which must be enabled."""
     _sync_runtime()
-    return bool(IS_DEV and is_enabled())
+    return bool(is_enabled())
 
 
 def run_search(user_id, *, query, sources=None, tags=None, start_date=None, end_date=None, limit=None, offset=0):
@@ -288,9 +293,99 @@ def run_get_blocks(user_id, *, tags, sources=None, start_date=None, end_date=Non
     return {"blocks": blocks, "count": len(blocks)}
 
 
+
+# ─── Semantische Suche ────────────────────────────────────────────────
+# Dieselbe Funktion wie im Brain-Tab (semantic_search); hier nur Bereich,
+# Freischaltung und Ausgabeform. Der private Bereich sucht nie in der Familie,
+# der Familienbereich nur dort — auch der Ausgangsblock von find_similar.
+_PERSONAL_SEMANTIC = tuple(source for source in semantic_settings.SOURCES if source != "family")
+
+
+def semantic_available():
+    """Endpunkt, Modell und Vektor-DB sind eingerichtet (global, Admin)."""
+    return semantic_settings.connection(semantic_settings.load_global()) is not None and vector_store.available()
+
+
+def _semantic_scope(user_id, sources, include):
+    if not semantic_settings.load_user(user_id)["enabled"]:
+        raise ToolUnavailable(
+            "Die semantische Suche ist für dieses Konto aus. Einschalten unter "
+            "Einstellungen → Brain → Semantische Suche."
+        )
+    if tuple(sources or ()) == ("family",):
+        return ["family"]
+    if include is None:
+        picked = [source for source in semantic_settings.load_user(user_id)["sources"] if source in _PERSONAL_SEMANTIC]
+        return picked or ["journal"]
+    if isinstance(include, str):
+        include = [include]
+    if not isinstance(include, list) or not include or any(item not in _PERSONAL_SEMANTIC for item in include):
+        raise ToolInputError("include darf nur {} enthalten".format(", ".join(_PERSONAL_SEMANTIC)))
+    return [source for source in _PERSONAL_SEMANTIC if source in include]
+
+
+def _semantic_hits(results, documents, scope):
+    hits = []
+    for item, document, block in semantic_search.blocks_for(results, documents, scope):
+        text = (block.get("text") or "").strip()
+        hits.append({
+            "source": document["source"],
+            "kind": document.get("kind"),
+            "path": document["path"],
+            "date": document.get("date"),
+            "anchor": item["anchor"],
+            "match": item["origin"],
+            "similarity": item.get("vector_score"),
+            "tags": sorted(set(block.get("tags", [])) | set(block.get("ai_tags", []))),
+            "text": text[:MAX_BLOCK_CHARS],
+            "truncated": len(text) > MAX_BLOCK_CHARS,
+        })
+    return hits
+
+
+def run_semantic_search(user_id, *, query, sources=None, include=None, start_date=None, end_date=None,
+                        mode="hybrid", limit=None):
+    """Hybride (oder rein semantische) Suche nach Bedeutung im eigenen Bereich."""
+    scope = _semantic_scope(user_id, sources, include)
+    query = str(query or "").strip()
+    if not query:
+        raise ToolInputError("query darf nicht leer sein")
+    if mode not in ("hybrid", "semantic"):
+        raise ToolInputError("mode muss 'hybrid' oder 'semantic' sein")
+    start, end = _date_bounds(start_date, end_date)
+    documents, _pending = brain_module._visible_documents(user_id)
+    payload = semantic_search.search(
+        user_id, query, sources=scope, mode=mode, documents=documents,
+        start_date=start.isoformat() if start else None, end_date=end.isoformat() if end else None,
+        limit=_bounded(limit, 10, MAX_SEMANTIC_LIMIT),
+    )
+    if mode == "semantic" and payload["semantic"]["status"] != "ok":
+        raise ToolUnavailable(payload["semantic"]["reason"] or "Die semantische Suche ist nicht verfügbar.")
+    hits = _semantic_hits(payload["results"], documents, scope)
+    return {"results": hits, "count": len(hits), "semantic": payload["semantic"]}
+
+
+def run_find_similar(user_id, *, path, anchor, sources=None, include=None, limit=None):
+    """Bloecke, die einem bekannten Block (path + anchor aus einem Treffer) aehneln."""
+    scope = _semantic_scope(user_id, sources, include)
+    documents, _pending = brain_module._visible_documents(user_id)
+    try:
+        results = semantic_search.similar(
+            user_id, str(path or ""), str(anchor or ""), sources=scope, scope=scope,
+            limit=_bounded(limit, 10, MAX_SEMANTIC_LIMIT), documents=documents,
+        )
+    except ValueError as exc:
+        raise ToolInputError(str(exc)) from None
+    except (EmbeddingError, vector_store.VectorStoreError) as exc:
+        raise ToolUnavailable(str(exc)) from None
+    hits = _semantic_hits(results, documents, scope)
+    return {"results": hits, "count": len(hits)}
+
+
 __all__ = [
     "ToolInputError", "ToolUnavailable", "search_available", "run_search", "run_get_blocks",
     "run_list_tags",
     "run_list_days", "run_get_day",
-    "MAX_SEARCH_LIMIT", "MAX_BLOCK_LIMIT", "MAX_DAY_LIMIT", "MAX_DAY_SPAN",
+    "semantic_available", "run_semantic_search", "run_find_similar",
+    "MAX_SEARCH_LIMIT", "MAX_BLOCK_LIMIT", "MAX_DAY_LIMIT", "MAX_DAY_SPAN", "MAX_SEMANTIC_LIMIT",
 ]

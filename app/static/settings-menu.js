@@ -13,6 +13,9 @@
     sections.forEach(section => section.classList.toggle('hidden', !inGroup.includes(section)));
     // A group with a single section is already named by the modal title.
     inGroup.forEach(section => section.querySelector('h3')?.classList.toggle('hidden', inGroup.length === 1));
+    // Listen mit Aktionen (Journal-Analyse) brauchen auf dem Desktop mehr als
+    // die 28 rem des Modals; ein Abschnitt fordert das mit data-settings-wide an.
+    body?.parentElement?.classList.toggle('sm:max-w-2xl', inGroup.some(section => section.hasAttribute('data-settings-wide')));
   }
 
   window.openSettingsGroup = function openSettingsGroup(group, label) {

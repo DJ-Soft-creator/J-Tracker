@@ -309,7 +309,15 @@
   // ─── Anbieter ─────────────────────────────────────────────────────
   // Anzeige und Verwaltung leben in provider-manager.js, damit dieser Bereich
   // der Rahmen bleibt und die config.json genau einen Schreiber im Browser hat.
-  function loadProviders(container) {
+  async function loadProviders(container) {
+    // provider-manager.js ist ein Agentenmodul und laedt erst hier; danach
+    // steht window.journlProviders bereit.
+    if (!window.journlProviders && window.journlAgentModules) {
+      container.innerHTML = '<p class="text-sm text-gray-500">Lade…</p>';
+      try {
+        await window.journlAgentModules.load('provider-manager.js');
+      } catch (_) { /* unten als fehlend gemeldet */ }
+    }
     if (!window.journlProviders) {
       container.innerHTML = '<p class="text-sm text-red-400">provider-manager.js fehlt.</p>';
       return;

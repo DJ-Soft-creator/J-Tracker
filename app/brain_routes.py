@@ -8,6 +8,7 @@ belong in the focused brain_* domain modules and are accessed through brain.py.
 import sys
 
 import background_runs
+import tagging_job
 
 _brain = sys.modules.get("brain")
 if _brain is None:  # pragma: no cover - enforced by brain.py import order
@@ -225,18 +226,17 @@ def brain_tagging_start():
     stale_before = data.get("stale_before", "")
     if mode == "stale" and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", stale_before or ""):
         return jsonify({"error": "stale mode needs an ISO date in stale_before"}), 400
-    main = _main_module()
-    config = main.load_config() if main else {}
-    if historical_tagging.resolve_provider(config, data.get("provider_id")) is None:
-        return jsonify({"error": "Select a configured local LM Studio provider"}), 400
+    if not historical_tagging.is_configured(historical_tagging.load_settings(user["id"])):
+        return jsonify({
+            "error": "Bitte unter Hashtags nachtragen einen lokalen Endpunkt und ein Modell speichern."
+        }), 400
     preview = bool(data.get("preview"))
     try:
         record = background_runs.start(
             user["id"], historical_tagging.RUN_KIND,
             {
                 "start_date": start, "end_date": end, "mode": mode,
-                "stale_before": stale_before, "provider_id": data.get("provider_id"),
-                "preview": preview,
+                "stale_before": stale_before, "preview": preview,
             },
             label="{} {} bis {}".format(
                 "Vorschau Verschlagwortung" if preview else "Verschlagwortung", start, end,
@@ -252,6 +252,98 @@ def brain_tagging_start():
         return jsonify({"error": str(exc)}), 400
     logger.info("Historical tagging run %s queued for %s (%s..%s)", record["id"], user["id"], start, end)
     return jsonify({"run": background_runs.public_run(record)}), 202
+
+
+@brain_bp.route("/tagging/settings", methods=["GET"])
+def brain_tagging_settings_get():
+    """Die Verbindung der Verschlagwortung — ohne den API-Schluessel."""
+    user, error = _require_user()
+    if error:
+        return error
+    settings = historical_tagging.load_settings(user["id"])
+    return jsonify(historical_tagging.public_settings(settings))
+
+
+@brain_bp.route("/tagging/settings", methods=["POST"])
+def brain_tagging_settings_set():
+    user, error = _require_user()
+    if error:
+        return error
+    csrf_error = _csrf_error()
+    if csrf_error:
+        return csrf_error
+    data = request.get_json(silent=True) or {}
+    try:
+        saved = historical_tagging.save_settings(user["id"], data)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, **historical_tagging.public_settings(saved)})
+
+
+@brain_bp.route("/tagging/job", methods=["GET"])
+def brain_tagging_job():
+    """Der Job „Hashtags nachtragen“ fuer die Verwaltung: Einstellungen, Zeitplan-
+    Zustand, letzter Lauf und die juengsten Meldungen in einer Antwort."""
+    user, error = _require_user()
+    if error:
+        return error
+    settings = historical_tagging.load_settings(user["id"])
+    state = tagging_job.load_state(historical_tagging._data_dir(), user["id"])
+    runs = background_runs.listing(user["id"], historical_tagging.RUN_KIND)
+    return jsonify({
+        "settings": historical_tagging.public_settings(settings),
+        "state": {key: state.get(key) for key in ("last_run_at", "attempts", "retry_after")},
+        "last_run": {**background_runs.public_run(runs[0]), "log": []} if runs else None,
+        "events": tagging_job.list_events(historical_tagging._data_dir(), user["id"])[-20:],
+        "max_attempts": tagging_job.MAX_ATTEMPTS,
+    })
+
+
+@brain_bp.route("/tagging/job/run", methods=["POST"])
+def brain_tagging_job_run():
+    """Den Job jetzt ausfuehren — mit Zeitraum und Modus aus seinen Einstellungen."""
+    user, error = _require_user()
+    if error:
+        return error
+    csrf_error = _csrf_error()
+    if csrf_error:
+        return csrf_error
+    settings = historical_tagging.load_settings(user["id"])
+    if not historical_tagging.is_configured(settings):
+        return jsonify({"error": "Bitte zuerst eine Verbindung (Endpunkt und Modell) speichern."}), 400
+    data = request.get_json(silent=True) or {}
+    params = historical_tagging.run_params(
+        settings, historical_tagging._local_now().date(), preview=bool(data.get("preview")),
+    )
+    try:
+        record = background_runs.start(
+            user["id"], historical_tagging.RUN_KIND, params, label=historical_tagging.run_label(params),
+        )
+    except background_runs.RunConflict as exc:
+        running = background_runs.active(user["id"], historical_tagging.RUN_KIND)
+        return jsonify({
+            "error": str(exc),
+            "run": background_runs.public_run(running) if running else None,
+        }), 409
+    except background_runs.RunError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"run": background_runs.public_run(record)}), 202
+
+
+@brain_bp.route("/tagging/models", methods=["GET"])
+def brain_tagging_models():
+    """Die lebende Modellliste des eingetragenen Endpunkts."""
+    user, error = _require_user()
+    if error:
+        return error
+    base_url = str(request.args.get("base_url") or "")
+    if not base_url:
+        base_url = historical_tagging.load_settings(user["id"])["base_url"]
+    try:
+        found = historical_tagging.discover_models(base_url)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 502
+    return jsonify({"models": found, "base_url": base_url})
 
 
 @brain_bp.route("/diagnostics", methods=["GET"])
@@ -357,11 +449,14 @@ def brain_tag_catalog():
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
-    # Ignoring or re-offering a proposal changes no journal footer and no
+    # Ignoring, re-offering or hiding a proposal changes no journal footer and no
     # reference, so it must not trigger a rebuild.  A personal catalog change
     # only affects this user's documents; only the shared Family catalog can
     # change what every other user sees.
-    if data.get("action") not in {"block", "unblock"}:
+    # The AI exclusion list only steers future tagging runs, likewise.
+    if data.get("action") not in {
+        "block", "unblock", "map_hide", "map_unhide", "map_exclude", "map_include", "ai_exclude", "ai_include",
+    }:
         enqueue_rebuild("__all__" if data.get("scope") == "family" else user["id"])
     return jsonify({"ok": True, "catalog": catalog})
 
@@ -692,6 +787,27 @@ def brain_metadata():
     return jsonify({"ok": True, "metadata": annotation})
 
 
+@brain_bp.route("/ai-tags/reject", methods=["POST"])
+def brain_ai_tags_reject():
+    """Take a model's hashtags back from one journal block (footer, not text)."""
+    user, error = _require_user()
+    if error:
+        return error
+    csrf_error = _csrf_error()
+    if csrf_error:
+        return csrf_error
+    data = request.get_json(silent=True) or {}
+    tags = data.get("tags")
+    if not isinstance(tags, list) or not tags or any(not isinstance(tag, str) for tag in tags):
+        return jsonify({"error": "tags must be a non-empty list of strings"}), 400
+    status, removed = reject_block_ai_tags(user["id"], data.get("doc_id"), data.get("fingerprint"), tags)
+    if status == "not_found":
+        return jsonify({"error": "Not found"}), 404
+    if status == "conflict":
+        return jsonify({"error": "Reference was changed and cannot be resolved", "conflict": True}), 409
+    return jsonify({"ok": True, "removed": removed})
+
+
 @brain_bp.route("/family", methods=["GET"])
 def brain_family_get():
     user, error = _require_user()
@@ -861,4 +977,4 @@ def brain_index_rebuild():
     return jsonify({"ok": True, "queued": queued, "interval_seconds": INDEX_INTERVAL_SECONDS}), 202
 
 
-__all__ = ['brain_bootstrap', 'brain_search', 'brain_tasks', 'brain_tags', 'brain_hashtag_replacement', 'brain_tagging_start', 'brain_diagnostics_report', 'brain_tag_catalog', 'brain_document_get', 'brain_document_put', 'brain_document_agent_session_action', 'brain_document_access_put', 'brain_task_toggle', 'brain_metadata', 'brain_family_get', '_family_file_title', 'brain_family_notes_post', 'brain_family_projects_post', 'brain_projects_get', 'brain_agent_sessions_get', 'brain_projects_post', 'brain_notes_get', 'brain_notes_post', 'brain_index_rebuild']
+__all__ = ['brain_bootstrap', 'brain_search', 'brain_tasks', 'brain_tags', 'brain_hashtag_replacement', 'brain_tagging_start', 'brain_diagnostics_report', 'brain_tag_catalog', 'brain_document_get', 'brain_document_put', 'brain_document_agent_session_action', 'brain_document_access_put', 'brain_task_toggle', 'brain_metadata', 'brain_ai_tags_reject', 'brain_family_get', '_family_file_title', 'brain_family_notes_post', 'brain_family_projects_post', 'brain_projects_get', 'brain_agent_sessions_get', 'brain_projects_post', 'brain_notes_get', 'brain_notes_post', 'brain_index_rebuild']

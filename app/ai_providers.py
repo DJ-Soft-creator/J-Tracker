@@ -44,7 +44,8 @@ _MAX_TOKENS_LIMIT = 400000
 # Reihenfolge und Umfang dessen, was die Verwaltung kennt. Unbekannte Felder
 # eines Eintrags bleiben erhalten (siehe ``_merge``) — die config.json wird
 # auch von Hand gepflegt, und ein hier unbekanntes Feld ist kein Muell.
-FIELDS = ("id", "label", "api_url", "model", "max_tokens", "temperature")
+FIELDS = ("id", "label", "api_url", "model", "max_tokens", "temperature", "thinking_budget",
+          "journal_analysis")
 
 
 class ProviderError(ValueError):
@@ -89,7 +90,7 @@ def env_managed_fields(provider, environ):
     managed = []
     index = provider.get("_index")
     if isinstance(index, int):
-        for field in ("api_url", "model", "max_tokens", "temperature", "label"):
+        for field in ("api_url", "model", "max_tokens", "temperature", "thinking_budget", "label"):
             if f"AI_PROVIDER_{index}_{field.upper()}" in environ:
                 managed.append(field)
     pid = str(provider.get("id") or "")
@@ -162,7 +163,7 @@ def _merge(candidate, previous):
     """Den kanonischen Eintrag bauen und unbekannte Altfelder mitnehmen."""
     merged = dict(previous or {})
     merged.update(candidate)
-    for field in ("max_tokens", "temperature"):
+    for field in ("max_tokens", "temperature", "thinking_budget"):
         if candidate.get(field) is None:
             merged.pop(field, None)
     return merged
@@ -191,7 +192,19 @@ def _validate_provider(raw, seen_ids, previous_by_id):
                               minimum=1, maximum=_MAX_TOKENS_LIMIT, integer=True),
         "temperature": _number(raw.get("temperature"), f"{where}: Die Temperatur",
                                minimum=0, maximum=2, integer=False),
+        # Denk-Budget fuer Reasoning-Modelle (llama.cpp ``thinking_budget_tokens``):
+        # danach muss das Modell antworten, statt das ganze Token-Budget zu verdenken.
+        "thinking_budget": _number(raw.get("thinking_budget"), f"{where}: Das Denk-Budget",
+                                   minimum=0, maximum=_MAX_TOKENS_LIMIT, integer=True),
     }
+
+    # Freigabe fuer die Journal-Analyse: ein Cloud-Anbieter bekommt dort
+    # Journalinhalte nur, wenn das hier ausdruecklich angehakt ist. Fehlt das
+    # Feld, bleibt der bisherige Stand.
+    if "journal_analysis" in raw:
+        candidate["journal_analysis"] = raw.get("journal_analysis") is True
+    else:
+        candidate["journal_analysis"] = bool((previous or {}).get("journal_analysis"))
 
     # Der Schluessel: fehlendes Feld heisst „unveraendert", damit die
     # Oberflaeche ihn nie zu Gesicht bekommen muss, um ihn zu behalten.

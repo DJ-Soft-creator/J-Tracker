@@ -76,13 +76,16 @@ class PwaAssetTests(unittest.TestCase):
         self.assertIn('CONFIG_PATH = DATA_DIR / "config.json"', main_source)
         self.assertNotIn('BASE_DIR / "config.json"', main_source)
 
+        job = (ROOT_DIR / "app" / "static" / "journal-analysis-tagging.js").read_text(encoding="utf-8")
         for template_name in ("desktop.html", "index.html"):
             template = (ROOT_DIR / "app" / "templates" / template_name).read_text(encoding="utf-8")
-            behavior = _template_behavior_source(template_name)
-            self.assertIn('id="brain-tag-provider"', template)
-            self.assertIn(".filter(p => String(p.id || '').startsWith('lm_'))", behavior)
-            self.assertIn("brainRunButton.disabled = localProviders.length === 0", behavior)
+            self.assertIn('id="brain-tag-connection"', template)
+            self.assertIn('id="brain-tag-manage"', template)
+            self.assertIn("filename='journal-analysis-tagging.js'", template)
+            self.assertNotIn('id="brain-tag-provider"', template)
             self.assertNotIn('<option value="lm_studio">LM Studio</option>', template)
+        for endpoint in ("settings", "models", "job/run"):
+            self.assertIn("/api/brain/tagging/" + endpoint, job)
 
     def test_every_tab_panel_contains_its_own_content(self):
         """Ein falsch geschlossenes <div> haengt Inhalt aus seinem Tab aus.
@@ -136,13 +139,13 @@ class PwaAssetTests(unittest.TestCase):
     def test_journal_db_mode_is_gated_and_brain_actions_sit_in_one_menu(self):
         """Der DB-Modus haengt am selben Flag wie sein Endpunkt.
 
-        Ohne den Guard stand "Journal DB" auch in PROD in der Leiste und
-        beantwortete jeden Klick mit "Journalsuche ist nicht aktiv".
+        Der Knopf "Journal DB" erscheint nur, wenn der Suchindex aktiv ist,
+        sonst beantwortete er jeden Klick mit "Journalsuche ist nicht aktiv".
         """
         main_source = (ROOT_DIR / "app" / "main.py").read_text(encoding="utf-8")
-        self.assertIn('"DB_SEARCH_ENABLED": IS_DEV and is_enabled()', main_source)
+        self.assertIn('"DB_SEARCH_ENABLED": is_enabled()', main_source)
         routes = (ROOT_DIR / "app" / "main_journal_routes.py").read_text(encoding="utf-8")
-        self.assertIn("if not IS_DEV or not is_enabled():", routes)
+        self.assertIn("if not is_enabled():", routes)
         for template_name in ("desktop.html", "index.html"):
             template = (ROOT_DIR / "app" / "templates" / template_name).read_text(encoding="utf-8")
             start = template.index("{% if DB_SEARCH_ENABLED %}")
@@ -343,7 +346,7 @@ class PwaAssetTests(unittest.TestCase):
             self.assertIn("payload.consume_draft_revision = draftRevisionToConsume", behavior)
             self.assertIn("window.markWriteAiDraftSubmitted(responseData)", behavior)
             core_asset = "desktop-app-core.js" if template_name == "desktop.html" else "mobile-app-core.js"
-            core_version = "20260916-1"
+            core_version = "20261004-1" if template_name == "desktop.html" else "20261007-1"
             self.assertIn(f"filename='{core_asset}', v='{core_version}'", template)
 
     def test_write_submit_button_recovers_without_reloading_the_app(self):
@@ -425,7 +428,8 @@ class PwaAssetTests(unittest.TestCase):
             self.assertIn("filename='write-history.js', v='20260822-9'", template)
             self.assertIn("filename='write-template-hashtags.js', v='20260814-1'", template)
             self.assertIn("filename='write-ai.js', v='20260829-2'", template)
-            self.assertIn("filename='write-session.js', v='20260916-2'", template)
+            self.assertIn("filename='write-session.js', v='20261028-1'", template)
+            self.assertIn("filename='write-voice.js', v='20261004-1'", template)
             self.assertIn("filename='whisper-model.js', v='20260824-1'", template)
             self.assertIn('id="settings-transcribe-model"', template)
             self.assertIn("filename='media-viewer.js', v='20260827-1'", template)
@@ -438,12 +442,14 @@ class PwaAssetTests(unittest.TestCase):
             self.assertIn("Senden hat zu lange gedauert", behavior)
             self.assertIn("filename='journal-highlighting.js', v='20260911-1'", template)
             self.assertIn("filename='write-read-mode.js', v='20260917-1'", template)
-            self.assertIn("filename='brain.js', v='20260905-1'", template)
+            self.assertIn("filename='brain.js', v='20261031-1'", template)
             self.assertIn('id="settings-transcribe-now"', template)
             self.assertIn('id="settings-transcribe-status"', template)
-        desktop = (ROOT_DIR / "app" / "templates" / "desktop.html").read_text(encoding="utf-8")
-        self.assertIn(".write-session-actions .write-session-action.is-recording", desktop)
-        self.assertIn("pointer-events: auto", desktop)
+        desktop =(ROOT_DIR / "app" / "templates" / "desktop.html").read_text(encoding="utf-8")
+        reveal = (ROOT_DIR / "app" / "static" / "write-controls-reveal.js").read_text(encoding="utf-8")
+        self.assertIn("filename='write-controls-reveal.js'", desktop)
+        self.assertIn(".write-session-actions .write-session-action.is-recording", reveal)
+        self.assertIn("pointer-events: auto", reveal)
         self.assertIn("window.journlWriteMediaStrip?.mount(document.getElementById('input-area'))", write_session)
         self.assertIn("anchor.insertAdjacentElement('afterend', shell)", media_strip)
         self.assertIn("Foto angehängt", media_strip)
@@ -493,7 +499,7 @@ class PwaAssetTests(unittest.TestCase):
             self.assertIn('data-journal-calendar="brain-end"', template)
             self.assertIn("filename='journal-calendar.js', v='20260815-1'", template)
             core_asset = "desktop-app-core.js" if template_name == "desktop.html" else "mobile-app-core.js"
-            core_version = "20260916-1"
+            core_version = "20261004-1" if template_name == "desktop.html" else "20261007-1"
             self.assertIn(f"filename='{core_asset}', v='{core_version}'", template)
         mobile = _shell_style_source("index.html")
         self.assertIn("#mobile-controls-scroll {\n  flex: 0 1 auto;\n  min-height: 0;\n  max-height: 55%;\n  padding-bottom: 0.5rem;", mobile)
@@ -562,7 +568,7 @@ class PwaAssetTests(unittest.TestCase):
         )
         for template_name in ("desktop.html", "index.html"):
             template = (ROOT_DIR / "app" / "templates" / template_name).read_text(encoding="utf-8")
-            self.assertIn("filename='tailwind.css', v='20260917-1'", template)
+            self.assertIn("filename='tailwind.css', v='20261029-2'", template)
             self.assertNotIn("cdn.tailwindcss.com", template)
         main_source = (ROOT_DIR / "app" / "main.py").read_text(encoding="utf-8")
         self.assertNotIn("cdn.tailwindcss.com", main_source)
@@ -639,7 +645,7 @@ class PwaAssetTests(unittest.TestCase):
             template = (ROOT_DIR / "app" / "templates" / template_name).read_text(encoding="utf-8")
             behavior = _template_behavior_source(template_name)
             self.assertIn('id="write-edit-cancel"', template)
-            self.assertIn("filename='write-source-edit.js', v='20260917-1'", template)
+            self.assertIn("filename='write-source-edit.js', v='20261007-1'", template)
             self.assertIn("openDashboardWriteEditor('${editId}')", behavior)
             self.assertIn('class="flex items-center gap-3', behavior)
             self.assertNotIn("function toggleEdit(editId)", behavior)
@@ -811,11 +817,22 @@ class PwaFlaskTests(unittest.TestCase):
         self.assertIn("url.origin !== self.location.origin", worker)
         # Caching an API response would let the worker serve another session's data.
         self.assertNotIn("/api/", worker)
+        # Nur ?v=-URLs sind unveraenderlich und duerfen cache-first kommen; ein
+        # Asset ohne Cache-Buster wuerde sonst fuer immer einfrieren.
+        self.assertIn("const immutable = Boolean(url.searchParams.get('v'));", worker)
+        self.assertIn("if (cached && immutable) return cached;", worker)
+        self.assertIn("if (cached) return cached;", worker)
+        # Der Cache-Name traegt die App-Version, damit activate() alte Staende
+        # wegwerfen kann statt sie unbegrenzt anzusammeln.
+        self.assertIn("new URL(self.location).searchParams.get('v')", worker)
+        self.assertIn("key.startsWith('journl-static-')", worker)
         for template_name in ("desktop.html", "index.html"):
-            self.assertIn(
-                "navigator.serviceWorker.register('/sw.js')",
-                _template_behavior_source(template_name),
-            )
+            template = (ROOT_DIR / "app" / "templates" / template_name).read_text(encoding="utf-8")
+            behavior = _template_behavior_source(template_name)
+            self.assertIn("data-app-version=\"{{ APP_VERSION }}\"", template)
+            self.assertIn("navigator.serviceWorker.register(path)", behavior)
+            self.assertIn("document.documentElement.dataset.appVersion", behavior)
+            self.assertIn("/sw.js?v=", behavior)
 
     def test_text_assets_are_gzipped_and_versioned_assets_are_cached_hard(self):
         """Kaltstart-Budget: das Frontend sind ~800 kB Text.

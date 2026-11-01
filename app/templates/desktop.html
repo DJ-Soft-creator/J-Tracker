@@ -1,7 +1,7 @@
 {# AI contract: desktop markup only; behavior lives in ordered desktop-app-*.js assets. #}
-{% from '_screensaver.html' import screensaver_menu, screensaver_settings, screensaver_resume %}
+{% from '_screensaver.html' import screensaver_menu, screensaver_settings, screensaver_resume, screensaver_scripts %}
 <!DOCTYPE html>
-<html lang="de" class="h-full">
+<html lang="de" class="h-full" data-app-version="{{ APP_VERSION }}">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -14,7 +14,7 @@
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
   <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
   <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='tailwind.css', v='20260917-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='tailwind.css', v='20261029-2') }}">
   <style>
     #brain-mode-row::-webkit-scrollbar { display: none; }
     html, body { max-width: 100%; overflow-x: hidden; }
@@ -41,10 +41,14 @@
 
     #app, main, .tab-content { min-width: 0; max-width: 100%; }
 
+    /* Die Hoehe (35 % bzw. gezogen) ist ein Wunsch, kein Muss: kommt darunter
+       etwas dazu (Sprachnachricht, Anhaenge, Textbausteine), schrumpft das
+       Feld bis min-height, statt den Tab scrollbar zu machen. Verschwindet es
+       wieder, waechst das Feld auf die gespeicherte Hoehe zurueck. */
     #input-area {
       box-sizing: border-box;
       display: flex;
-      flex: 0 0 auto;
+      flex: 0 1 auto;
       flex-direction: column;
       width: calc(100% - clamp(16px, 10vw, 100px));
       height: 35%;
@@ -137,39 +141,9 @@
       display: grid; place-items: center; width: 2.5rem; padding: 0; border-radius: 9999px;
     }
     @media (hover: hover) and (pointer: fine) {
-      .write-session-actions { gap: 0; padding: .85rem; margin: -.85rem; }
-      /* Zuruecklaufen: erst eine kurze Schonfrist, dann ausblenden und leicht
-         zur Seite gleiten, und erst danach die Breite einziehen. Dadurch
-         verblasst die Leiste, statt zuzuschnappen. */
-      .write-session-actions .write-session-action {
-        width: 0; margin: 0; padding: 0; overflow: hidden; opacity: 0; border-width: 0;
-        transform: translateX(-.35rem); pointer-events: none;
-        transition: opacity .3s ease .15s,
-                    transform .34s cubic-bezier(.4, 0, .2, 1) .15s,
-                    width .34s cubic-bezier(.4, 0, .2, 1) .22s,
-                    margin .34s cubic-bezier(.4, 0, .2, 1) .22s;
-      }
-      /* Hoverzone ist die komplette untere Steuerleiste, nicht nur der schmale
-         Knopfblock: wer die Maus Richtung "Senden" bewegt, hat die Werkzeuge
-         schon offen, statt erst einen 40-Pixel-Streifen treffen zu muessen. */
-      .desktop-controls:hover .write-session-actions .write-session-action,
-      .write-session-actions:focus-within .write-session-action {
-        width: 2.5rem; margin-left: .15rem; padding: 0; opacity: 1; border-width: 1px;
-        transform: translateX(0); pointer-events: auto;
-        /* Aufziehen ohne Verzoegerung: Breite laeuft voran, die Deckkraft
-           zieht minimal versetzt nach, damit nichts aufblitzt. */
-        transition: width .34s cubic-bezier(.22, .61, .36, 1),
-                    margin .34s cubic-bezier(.22, .61, .36, 1),
-                    transform .34s cubic-bezier(.22, .61, .36, 1),
-                    opacity .3s ease .06s;
-      }
-      .write-session-actions .write-session-action.is-recording {
-        width: 2.5rem; margin-left: .15rem; padding: 0; overflow: visible;
-        opacity: 1; border-width: 1px; transform: translateX(0); pointer-events: auto; transition-delay: 0s;
-      }
       /* Aktivierungszone der Steuerleiste rund 20 % groesser als ihre Hoehe
-         (~64 px): je 6 px darueber und darunter, per negativem Rand, damit die
-         Leiste selbst nicht waechst. */
+         (~64 px): je 6 px darueber und darunter, per negativem Rand. Das
+         Einblenden der Knoepfe steuert write-controls-reveal.js samt CSS. */
       .desktop-controls {
         padding-top: calc(.75rem + 6px); padding-bottom: calc(.75rem + 6px);
         margin-top: -6px; margin-bottom: -6px;
@@ -179,22 +153,6 @@
          wenn der Zeiger nur in diesem Rand steht. */
       [data-action-menu] { padding: 3px; margin: -3px; }
     }
-    @media (prefers-reduced-motion: reduce) {
-      .write-session-action,
-      .write-session-actions .write-session-action,
-      .desktop-controls:hover .write-session-actions .write-session-action,
-      .write-session-actions:focus-within .write-session-action { transition-duration: .01ms; transition-delay: 0s; }
-    }
-    .desktop-controls:not(:hover) .write-session-actions.is-source-edit:not(:focus-within):not(.is-expanded) .write-session-action {
-      width: 0; margin: 0; padding: 0; overflow: hidden; opacity: 0; border-width: 0;
-      transform: translateX(-.35rem); pointer-events: none;
-    }
-    .write-session-actions.is-source-edit.is-expanded .write-session-action,
-    .write-session-actions.is-source-edit .write-session-action.is-recording {
-      width: 2.5rem; margin-left: .15rem; padding: 0; opacity: 1; border-width: 1px;
-      transform: translateX(0); pointer-events: auto;
-    }
-    .write-session-actions.is-source-edit .write-session-action.is-recording { overflow: visible; }
 
     .desktop-controls {
       position: static !important;
@@ -421,6 +379,8 @@
             <button data-settings-open="voice" data-settings-label="Sprachnachrichten" class="w-full flex items-center gap-2.5 text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 transition"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg><span>Sprachnachrichten</span></button>
             <button data-settings-open="integrations" data-settings-label="Integrationen" class="w-full flex items-center gap-2.5 text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 transition"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.5 13.5a4.5 4.5 0 0 0 6.4 0l2.2-2.2a4.5 4.5 0 0 0-6.4-6.4L11.4 6.2"/><path d="M13.5 10.5a4.5 4.5 0 0 0-6.4 0l-2.2 2.2a4.5 4.5 0 0 0 6.4 6.4l1.3-1.3"/></svg><span>Integrationen</span></button>
             <button data-tickets-entry data-settings-open="worker" data-settings-label="AI-Worker" class="hidden w-full flex items-center gap-2.5 text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 transition"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 4v4"/><path d="M9.5 13h.01"/><path d="M14.5 13h.01"/><path d="M9.5 17h5"/></svg><span>AI-Worker</span></button>
+            <button data-settings-open="analysis" data-settings-label="Journal Analyse Verwaltung" class="w-full flex items-center gap-2.5 text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 transition"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16v-4"/><path d="M12 16V8"/><path d="M16 16v-6"/></svg><span>Journal Analyse</span></button>
+            <button data-settings-open="notifications" data-settings-label="Benachrichtigungen" class="w-full flex items-center gap-2.5 text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 transition"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span>Benachrichtigungen</span></button>
             {{ screensaver_menu('Strg+Alt+B') }}
             <button data-settings-open="account" data-settings-label="Konto &amp; Sicherheit" class="w-full flex items-center gap-2.5 text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 transition"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>Konto &amp; Sicherheit</span></button>
             <button data-settings-open="privacy" data-settings-label="Daten &amp; Datenschutz" class="w-full flex items-center gap-2.5 text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 transition"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5 4.5 6.2V12c0 4.6 3.1 7.7 7.5 8.5 4.4-.8 7.5-3.9 7.5-8.5V6.2Z"/></svg><span>Daten &amp; Datenschutz</span></button>
@@ -438,6 +398,7 @@
         class="tab-btn active relative flex-1 px-5 py-3 text-sm font-medium border-b-2 border-green-400 text-green-400 transition">
         Schreiben
         <span id="worker-notify" class="hidden absolute left-1/2 -translate-x-1/2 bottom-1 h-[3px] w-12 rounded-full pointer-events-none"></span>
+        <span id="analysis-notify" role="button" tabindex="0" aria-label="Journal-Analyse-Benachrichtigungen" class="hidden absolute left-1/2 -translate-x-1/2 top-1 z-10 -m-2 cursor-pointer p-2"><span data-analysis-dot class="block h-[3px] w-12 rounded-full"></span></span>
       </button>
       <button onclick="switchTab('dashboard')" id="tab-btn-dashboard"
         class="tab-btn flex-1 px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-300 transition">
@@ -493,7 +454,7 @@
                     class="h-10 px-3 whitespace-nowrap rounded-lg bg-gray-800/10 border border-gray-700/10 text-xs text-gray-300 hover:text-white hover:border-gray-600 transition shrink-0">
               ● 0
             </button>
-            <div class="relative flex-none w-9">
+            <div id="template-select-wrap" class="relative flex-none w-9">
               <select id="template-select" class="h-10 w-full min-w-0 rounded-lg bg-gray-800/10 border border-gray-700/10 px-2 text-sm text-transparent hover:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none" aria-label="Template wählen"></select>
               <span aria-hidden="true" class="pointer-events-none absolute inset-0 flex items-center justify-center text-gray-400">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="w-[18px] h-[18px]" aria-hidden="true">
@@ -569,15 +530,16 @@
               <div class="relative inline-flex shrink-0" data-action-menu>
                 <button type="button" data-action-menu-trigger aria-haspopup="menu" aria-expanded="false"
                   title="Brain-Menü" aria-label="Brain-Menü"
-                  class="shrink-0 rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-gray-300 hover:bg-gray-700 hover:text-white transition">
+                  class="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-gray-700/70 bg-gray-800/50 text-gray-400 shadow-sm transition hover:border-gray-500 hover:bg-gray-700/70 hover:text-white aria-expanded:border-gray-500 aria-expanded:text-white">
                   <svg viewBox="0 0 24 24" class="h-5 w-5 pointer-events-none" fill="currentColor" aria-hidden="true">
-                    <circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/>
+                    <circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/>
                   </svg>
                 </button>
                 <!-- Die echten Knoepfe bleiben hier haengen; action-menu.js baut
                      daraus die Menuezeilen und leitet den Klick an sie weiter. -->
                 <div data-action-menu-items class="hidden">
                   <button type="button" id="brain-menu-chat" data-menu-label="Chat with your Notes"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 12a8 8 0 0 1-8 8H4.5l2.2-3.1A8 8 0 1 1 20.5 12Z"/></svg></button>
+                  <button type="button" id="brain-menu-map" data-menu-label="Hashtag-Map"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.2"/><circle cx="5" cy="6" r="1.6"/><circle cx="19" cy="7" r="1.6"/><circle cx="17" cy="19" r="1.6"/><circle cx="5.5" cy="17.5" r="1.6"/><path d="M6.4 6.9 10.2 10.8M17.6 7.9l-3.8 2.8M13.6 13.7l2.4 3.9M10.2 13.3l-3.4 3.2"/></svg></button>
                   <button type="button" id="brain-menu-catalog" data-menu-label="Hashtag-Katalog"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 12.6V4.5a1 1 0 0 1 1-1h8.1L20.5 11.4 12.4 19.5Z"/><path d="M7.8 7.8h.01"/></svg></button>
                   <button type="button" data-brain-hashtag-replace data-menu-label="Hashtags ersetzen"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h15"/><path d="m16 6 3 3-3 3"/><path d="M20 15H5"/><path d="m8 12-3 3 3 3"/></svg></button>
                   <button type="button" id="brain-menu-select" data-menu-label="Auswählen"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="m8 12.3 2.8 2.8L16.2 9"/></svg></button>
@@ -682,6 +644,15 @@
               <span id="brain-chat-model-note" class="truncate text-[11px] text-gray-600"></span>
             </div>
             <div id="brain-chat-log" class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden rounded-xl border border-gray-800 bg-gray-900/40 px-3 py-3 space-y-3" aria-live="polite"></div>
+            <!-- Zusätzliche Quellen je Frage: Default aus, gespeichert pro Konto (brain-chat.json). -->
+            <div class="shrink-0 flex flex-wrap items-center gap-2 pt-2" role="group" aria-label="Zusätzliche Quellen für den Chat">
+              <button type="button" id="brain-chat-scope-projects" data-chat-scope="include_projects" aria-pressed="false"
+                title="Eigene und sichtbare Familienprojekte einbeziehen"
+                class="inline-flex items-center gap-1.5 rounded-full border border-gray-700 bg-gray-800/60 px-2.5 py-1 text-xs text-gray-400 transition hover:text-gray-200"><svg viewBox="0 0 24 24" class="h-3.5 w-3.5 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Projekte einbeziehen</button>
+              <button type="button" id="brain-chat-scope-notes" data-chat-scope="include_notes" aria-pressed="false"
+                title="Eigene und sichtbare Familiennotizen einbeziehen"
+                class="inline-flex items-center gap-1.5 rounded-full border border-gray-700 bg-gray-800/60 px-2.5 py-1 text-xs text-gray-400 transition hover:text-gray-200"><svg viewBox="0 0 24 24" class="h-3.5 w-3.5 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h9l3 3v15H6z"/><path d="M9 10h6"/><path d="M9 14h6"/><path d="M9 18h4"/></svg>Notes einbeziehen</button><button type="button" id="brain-chat-scope-semantic" data-chat-scope="semantic_search" aria-pressed="false" title="Der Chat darf zusätzlich nach Bedeutung suchen (Embedding-Modell auf dem Mac mini)" class="hidden inline-flex items-center gap-1.5 rounded-full border border-gray-700 bg-gray-800/60 px-2.5 py-1 text-xs text-gray-400 transition hover:text-gray-200"><svg viewBox="0 0 24 24" class="h-3.5 w-3.5 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="10" cy="18" r="2"/><path d="m7.8 6.6 8.3 1"/><path d="m6.9 7.8 2.3 8.4"/><path d="m16.6 9.5-5.2 7"/></svg>Bedeutungssuche</button>
+            </div>
             <div class="shrink-0 flex items-end gap-2 pt-2">
               <textarea id="brain-chat-input" rows="2" placeholder="Frag dein Journal … (Enter sendet, Shift+Enter neue Zeile)"
                 class="flex-1 min-w-0 resize-none rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500"></textarea>
@@ -697,7 +668,7 @@
                 </button>
                 <!-- Bewusst schmal gehalten: der Platz für spätere Chat-Funktionen. -->
                 <div data-action-menu-items class="hidden">
-                  <button type="button" id="brain-chat-menu-steps" data-menu-label="Nachweise anzeigen"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg></button>
+                  <button type="button" id="brain-chat-menu-steps" data-menu-label="Werkzeugaufrufe ein/aus"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg></button>
                   <button type="button" id="brain-chat-menu-clear" data-menu-label="Neuer Chat"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button>
                   <button type="button" id="brain-chat-menu-discard" data-menu-label="Chat verwerfen"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/></svg></button>
                   <button type="button" id="brain-chat-menu-settings" data-menu-label="Verbindung &amp; Modell"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3"/><path d="M12 18.5v3"/><path d="M2.5 12h3"/><path d="M18.5 12h3"/><path d="m5.3 5.3 2.1 2.1"/><path d="m16.6 16.6 2.1 2.1"/><path d="m18.7 5.3-2.1 2.1"/><path d="m7.4 16.6-2.1 2.1"/></svg></button>
@@ -778,6 +749,10 @@
             <label class="flex items-center justify-between gap-3 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200"><span><span class="block font-medium">Ansicht beim Start</span><span class="block text-xs text-gray-500">Gilt nur auf diesem Gerät. „Lesen“ zeigt allein die Lesefassung – geschrieben wird dort erst nach dem Umschalten im ⋯-Menü.</span></span><select id="settings-start-view" class="h-9 shrink-0 rounded-lg bg-gray-800 border border-gray-700 px-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500" aria-label="Ansicht beim Start"></select></label>
           </div>
         </section>
+        <section data-settings-group="write">
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Vorlesen</h3>
+          <div id="settings-tts"></div>
+        </section>
         {% if IS_DEV %}<section data-settings-group="presentation">
           <h3 class="text-sm font-semibold text-gray-300 mb-1">Präsentation</h3>
           <label class="flex items-center justify-between gap-3 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200"><span><span class="block font-medium">YouTube-Mode</span><span class="block text-xs text-gray-500">Nur Darstellung: DEV-Daten und DEV-Endpunkte bleiben aktiv.</span></span><input id="settings-youtube-mode" type="checkbox" class="h-5 w-5 accent-green-500" /></label>
@@ -821,6 +796,15 @@
           <!-- Unterseiten und Inhalte rendert agent-workbench.js aus PANELS. -->
           <div data-worker-shell></div>
         </section>
+        <section data-settings-group="notifications">
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Pushover</h3>
+          <div id="settings-pushover"></div>
+        </section>
+        <section data-settings-group="analysis" data-settings-wide>
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Journal Analyse Verwaltung</h3>
+          <!-- Unterseiten und Inhalte rendert journal-analysis.js aus PANELS. -->
+          <div data-analysis-shell></div>
+        </section>
         <section data-settings-group="brain">
           <h3 class="text-sm font-semibold text-gray-300 mb-2">Brain</h3>
           <div class="flex flex-wrap gap-2">
@@ -832,8 +816,8 @@
           <div id="brain-tagging-controls" class="hidden mt-3 flex flex-wrap items-center gap-2 text-sm text-gray-400">
             <label>Von <input id="brain-tag-start" type="date" class="rounded bg-gray-800 border border-gray-700 px-2 py-1 text-gray-100" /></label>
             <label>Bis <input id="brain-tag-end" type="date" class="rounded bg-gray-800 border border-gray-700 px-2 py-1 text-gray-100" /></label>
-            <select id="brain-tag-provider" aria-label="Lokaler Anbieter" class="rounded bg-gray-800 border border-gray-700 px-2 py-1 text-gray-100"></select>
-            <select id="brain-tag-mode" aria-label="Modus" class="rounded bg-gray-800 border border-gray-700 px-2 py-1 text-gray-100"><option value="missing">Nur noch nicht getaggte</option><option value="refresh">Alles neu bewerten</option><option value="stale">Neu bewerten, wenn getaggt vor</option></select>
+            <div class="w-full flex flex-wrap items-center gap-2 rounded border border-sky-900/60 bg-sky-950/20 px-2 py-1.5 text-xs"><span id="brain-tag-connection" class="min-w-0 flex-1 text-gray-400" role="status" aria-live="polite">Verbindung wird geladen …</span><button id="brain-tag-manage" type="button" class="rounded bg-gray-700 px-3 py-1 text-white hover:bg-gray-600">Verbindung, Zeitplan &amp; Protokoll</button></div>
+            <select id="brain-tag-mode" aria-label="Modus" class="rounded bg-gray-800 border border-gray-700 px-2 py-1 text-gray-100"><option value="missing">Nur neue Einträge</option><option value="refresh">Alles neu bewerten</option><option value="stale">Neu bewerten, wenn getaggt vor</option></select>
             <input id="brain-tag-stale" type="date" aria-label="Getaggt vor" class="hidden rounded bg-gray-800 border border-gray-700 px-2 py-1 text-gray-100" />
             <label class="flex items-center gap-1"><input id="brain-tag-preview" type="checkbox" class="accent-green-600" /> Nur ansehen</label>
             <button id="brain-tag-run" type="button" disabled class="rounded bg-green-700 px-3 py-1 text-white hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed">Starten</button>
@@ -842,6 +826,7 @@
           <div id="brain-tag-log" class="hidden mt-2 max-h-64 space-y-2 overflow-y-auto rounded border border-gray-700 bg-gray-900/60 p-2 text-xs"></div>
           <div id="brain-health" class="hidden mt-2 space-y-1 rounded border border-gray-700 bg-gray-900/60 p-2 text-xs"></div>
         </section>
+        <section data-settings-group="brain"><h3 class="text-sm font-semibold text-gray-300 mb-2">Semantische Suche</h3><div id="settings-semantic" class="text-sm text-gray-300"><p class="text-gray-500">Lade&hellip;</p></div></section>
         <section data-settings-group="brain">
           <h3 class="text-sm font-semibold text-gray-300 mb-2">Chat with your Notes</h3>
           <p class="mb-2 text-xs text-gray-500">Der Chat liest deine eigenen Journale über dieselben Werkzeuge wie der MCP-Endpunkt. Erlaubt sind nur Endpunkte im lokalen Netz, damit Journalinhalte den Host nicht verlassen.</p>
@@ -856,6 +841,7 @@
             <select id="brain-chat-model" class="min-w-0 flex-1 rounded bg-gray-800 border border-gray-700 px-2 py-1 text-sm text-gray-100"></select>
             <button id="brain-chat-models-load" type="button" class="shrink-0 rounded bg-gray-700 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-gray-600">Modelle laden</button>
           </div>
+          <p class="mb-2 text-xs text-gray-500">Läuft die semantische Suche mit, passen auf dem Mac mini daneben <code>ArmyKnife2-t</code> (Alltag, schnell) oder <code>bonsai-code-t</code> (größtes Kontextfenster); <code>code-t</code> wird mit dem Embedding-Modell knapp.</p>
           <button id="brain-chat-settings-save" type="button" class="rounded bg-green-700 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-green-600">Speichern</button>
           <span id="brain-chat-settings-status" class="ml-2 text-xs text-gray-500" role="status" aria-live="polite"></span>
         </section>
@@ -881,6 +867,9 @@
         <section data-settings-group="about">
           <h3 class="text-sm font-semibold text-gray-300 mb-1">Über Journl</h3>
           <p class="text-xs text-gray-500">Version <span id="settings-app-version">–</span></p>
+          <h4 class="mt-4 mb-1 text-xs font-semibold text-gray-400">Startzeit dieses Geräts</h4>
+          <!-- startup-timing.js: letzte Starts bis „bedienbar“, Cache-Anteil, langsame API-Aufrufe. -->
+          <div id="settings-startup-timing"></div>
         </section>
       </div>
     </div>
@@ -901,7 +890,7 @@
           <label class="block text-xs text-gray-500 mb-1" id="editor-bulk-label">Mehrere Artikel hinzufügen (einer pro Zeile):</label>
           <textarea id="editor-bulk" class="w-full h-24 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500 resize-none" placeholder="Butter&#10;Mehl&#10;Zucker"></textarea>
           <div id="editor-bulk-extra" class="flex flex-wrap items-center gap-2 mt-2 hidden">
-            <label class="text-xs text-gray-500">für neue Aufgaben:</label>
+            <label class="text-xs text-gray-500">Vorgabe für Zeilen ohne eigene Angabe:</label>
             <select id="editor-bulk-user" class="rounded-lg bg-gray-800 border border-gray-700 px-2 py-2 text-xs text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500"></select>
             <input type="date" id="editor-bulk-date" class="rounded-lg bg-gray-800 border border-gray-700 px-2 py-2 text-xs text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500" />
           </div>
@@ -918,11 +907,13 @@
   <div id="shopping-modal" class="fixed inset-0 z-50 hidden flex-col {% if IS_DEV %}bg-red-950/95{% else %}bg-gray-950/95{% endif %}">
     <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800 shrink-0">
       <h2 class="flex items-center gap-2 text-lg font-semibold text-gray-100"><span class="text-gray-400"><svg viewBox="0 0 24 24" class="h-5 w-5 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9.5" cy="20" r="1.3"/><circle cx="18" cy="20" r="1.3"/><path d="M2 3h3l2.7 12.4a2 2 0 0 0 2 1.6h7.6a2 2 0 0 0 2-1.6L21 7H6"/></svg></span><span id="shopping-title">Einkaufsliste</span></h2>
-      <button id="shopping-close" class="text-gray-500 hover:text-white text-xl leading-none">×</button>
+      <div class="flex items-center gap-3">
+        <button id="shopping-sort" type="button" class="inline-flex items-center gap-1.5 rounded-lg border border-gray-700 px-3 py-1.5 text-sm text-gray-300 hover:border-green-700 hover:text-green-400" title="Liste im Einkaufslisten-Agenten nach dem Ladenaufbau sortieren"><svg viewBox="0 0 24 24" class="h-4 w-4 pointer-events-none shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 4v4"/><path d="M9.5 13h.01"/><path d="M14.5 13h.01"/><path d="M9.5 17h5"/></svg><span>Nach Laden sortieren</span></button>
+        <button id="shopping-close" class="text-gray-500 hover:text-white text-xl leading-none">×</button>
+      </div>
     </div>
     <div id="shopping-container" class="flex-1 overflow-y-auto px-5 py-4 space-y-2 max-w-2xl w-full mx-auto"></div>
   </div>
-
   <!-- Toast notification -->
   <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-green-600 text-white px-5 py-2.5 rounded-lg shadow-xl text-sm font-medium opacity-0 pointer-events-none transition-opacity duration-300 z-50">
     Gespeichert!
@@ -932,31 +923,46 @@
   <script src="{{ url_for('static', filename='icons.js', v='20260917-1') }}"></script>
   <script src="{{ url_for('static', filename='action-menu.js', v='20260914-1') }}"></script>
   <script src="{{ url_for('static', filename='write-submit-state.js', v='20260815-1') }}"></script>
-  <script src="{{ url_for('static', filename='desktop-app-core.js', v='20260916-1') }}"></script>
+  <script src="{{ url_for('static', filename='desktop-app-core.js', v='20261004-1') }}"></script>
   <script src="{{ url_for('static', filename='dashboard-days.js', v='20260823-1') }}"></script>
-  <script src="{{ url_for('static', filename='desktop-app-features.js', v='20260917-1') }}"></script>
-  <script src="{{ url_for('static', filename='settings-menu.js', v='20260822-2') }}"></script>
+  <script src="{{ url_for('static', filename='desktop-app-features.js', v='20261022-1') }}"></script>
+  <script src="{{ url_for('static', filename='settings-menu.js', v='20261001-1') }}"></script>
+  <script src="{{ url_for('static', filename='startup-timing.js', v='20261004-1') }}"></script>
   <script src="{{ url_for('static', filename='template-manager.js', v='20260829-2') }}"></script>
   <script src="{{ url_for('static', filename='snippet-manager.js', v='20260904-1') }}"></script>
   <script src="{{ url_for('static', filename='write-ticket.js', v='20260829-2') }}"></script>
-  <script src="{{ url_for('static', filename='agent-workbench.js', v='20260916-4') }}"></script>
-  <script src="{{ url_for('static', filename='provider-manager.js', v='20260916-1') }}"></script>
+  <script src="{{ url_for('static', filename='agent-workbench.js', v='20260917-2') }}"></script>
+  <script src="{{ url_for('static', filename='journal-analysis-schedule.js', v='20261004-2') }}"></script>
+  <script src="{{ url_for('static', filename='journal-analysis-tagging.js', v='20261005-1') }}"></script>
+  <script src="{{ url_for('static', filename='journal-analysis-notify.js', v='20261023-1') }}"></script>
+  <script src="{{ url_for('static', filename='journal-analysis.js', v='20261023-1') }}"></script>
+  <script src="{{ url_for('static', filename='analysis-notify-trigger.js', v='20261004-2') }}"></script>
+  <!-- Lazy: agent-workbench.js laedt provider-manager.js erst beim Oeffnen der Unterseite "Anbieter". -->
+  <script type="text/journl-lazy" data-lazy="provider-manager.js" src="{{ url_for('static', filename='provider-manager.js', v='20261002-2') }}"></script>
   <script src="{{ url_for('static', filename='buckets.js', v='20260906-2') }}"></script>
   <script src="{{ url_for('static', filename='desktop-app-resize.js', v='20260825-2') }}"></script>
   <script src="{{ url_for('static', filename='write-targets.js', v='20260821-1') }}"></script>
-  <script src="{{ url_for('static', filename='family-board.js', v='20260917-1') }}"></script>
-  <script src="{{ url_for('static', filename='agent-viewport.js', v='20260916-1') }}"></script>
-  <script src="{{ url_for('static', filename='shopping-agent.js', v='20260916-5') }}"></script>
-  <script src="{{ url_for('static', filename='planner.js') }}"></script>
+  <script src="{{ url_for('static', filename='family-board.js', v='20261004-1') }}"></script>
+  <script src="{{ url_for('static', filename='family-quick-tasks.js', v='20261004-2') }}"></script>
+  <!-- Lazy: agent-viewport.js und shopping-agent.js laedt agent-lazy.js beim ersten Aufruf. -->
+  <script type="text/journl-lazy" data-lazy="agent-viewport.js" src="{{ url_for('static', filename='agent-viewport.js', v='20260916-1') }}"></script>
+  <script type="text/journl-lazy" data-lazy="shopping-agent.js" src="{{ url_for('static', filename='shopping-agent.js', v='20261022-2') }}"></script>
+  <script src="{{ url_for('static', filename='planner.js', v='20260917-1') }}"></script>
   <script src="{{ url_for('static', filename='journal-highlighting.js', v='20260911-1') }}"></script>
   <script src="{{ url_for('static', filename='media-viewer.js', v='20260827-1') }}"></script>
-  <script src="{{ url_for('static', filename='brain.js', v='20260905-1') }}"></script>
-  <script src="{{ url_for('static', filename='brain-cards.js', v='20260916-1') }}"></script>
-  <script src="{{ url_for('static', filename='brain-tag-filters.js', v='20260905-1') }}"></script>
+  <script src="{{ url_for('static', filename='brain.js', v='20261031-1') }}"></script>
+  <script src="{{ url_for('static', filename='brain-cards.js', v='20261031-2') }}"></script>
+  <script src="{{ url_for('static', filename='brain-tag-filters.js', v='20261002-1') }}"></script>
   <script src="{{ url_for('static', filename='brain-select.js', v='20260905-1') }}"></script>
-  <script src="{{ url_for('static', filename='brain-tagging-run.js', v='20260831-1') }}"></script>
+  <script src="{{ url_for('static', filename='brain-tagging-run.js', v='20261005-1') }}"></script>
   <script src="{{ url_for('static', filename='brain-content.js', v='20260905-1') }}"></script>
-  <script src="{{ url_for('static', filename='brain-chat.js', v='20260831-1') }}"></script>
+  <script src="{{ url_for('static', filename='brain-tag-editor.js', v='20261007-1') }}"></script>
+  <script src="{{ url_for('static', filename='brain-chat.js', v='20261031-1') }}"></script>
+  <script src="{{ url_for('static', filename='brain-semantic-settings.js', v='20261031-2') }}"></script><script src="{{ url_for('static', filename='brain-semantic-search.js', v='20261031-3') }}"></script>
+  <script src="{{ url_for('static', filename='brain-tag-map.js', v='20261002-11') }}"></script>
+  <script src="{{ url_for('static', filename='brain-tag-map-views.js', v='20261002-6') }}"></script>
+  <script src="{{ url_for('static', filename='brain-tag-map-list.js', v='20261002-2') }}"></script>
+  <script src="{{ url_for('static', filename='brain-tag-map-actions.js', v='20261002-2') }}"></script>
   <script src="{{ url_for('static', filename='brain-replace.js', v='20260815-1') }}"></script>
   <script src="{{ url_for('static', filename='brain-diagnostics.js', v='20260831-1') }}"></script>
   <script src="{{ url_for('static', filename='journal-calendar.js', v='20260815-1') }}"></script>
@@ -964,21 +970,30 @@
   <script src="{{ url_for('static', filename='write-snippets.js', v='20260904-3') }}"></script>
   <script src="{{ url_for('static', filename='write-hashtags.js', v='20260829-1') }}"></script>
   <script src="{{ url_for('static', filename='write-template-hashtags.js', v='20260814-1') }}"></script>
+  <script src="{{ url_for('static', filename='write-list-continue.js', v='20261004-1') }}"></script>
   <script src="{{ url_for('static', filename='write-ai.js', v='20260829-2') }}"></script>
   <script src="{{ url_for('static', filename='whisper-model.js', v='20260824-1') }}"></script>
   <script src="{{ url_for('static', filename='journal-media.js', v='20260915-1') }}"></script>
-  <script src="{{ url_for('static', filename='write-media-strip.js', v='20260915-2') }}"></script>
+  <script src="{{ url_for('static', filename='write-media-strip.js', v='20261003-1') }}"></script>
   <script src="{{ url_for('static', filename='write-media-menu.js', v='20260916-1') }}"></script>
-  <script src="{{ url_for('static', filename='write-session.js', v='20260916-2') }}"></script>
+  <script src="{{ url_for('static', filename='write-session.js', v='20261028-1') }}"></script>
+  <script src="{{ url_for('static', filename='write-voice.js', v='20261004-1') }}"></script>
+  <script src="{{ url_for('static', filename='write-speech.js', v='20261004-1') }}"></script>
+  <script src="{{ url_for('static', filename='tts-settings.js', v='20261002-1') }}"></script>
+  <script src="{{ url_for('static', filename='pushover-settings.js', v='20261005-1') }}"></script>
+  <script src="{{ url_for('static', filename='deep-link.js', v='20261005-1') }}"></script>
   <script src="{{ url_for('static', filename='transcription-schedule.js', v='20260914-1') }}"></script>
   <script src="{{ url_for('static', filename='write-deep-mode.js', v='20260829-1') }}"></script>
-  <script src="{{ url_for('static', filename='screensaver.js', v='20260916-1') }}"></script>
-  <script src="{{ url_for('static', filename='screensaver-settings.js', v='20260914-3') }}"></script>
+  {{ screensaver_scripts() }}
   <script src="{{ url_for('static', filename='write-read-mode.js', v='20260917-1') }}"></script>
   <script src="{{ url_for('static', filename='screenshot-inbox.js', v='20260916-2') }}"></script>
   <script src="{{ url_for('static', filename='share-api.js', v='20260824-1') }}"></script>
-  <script src="{{ url_for('static', filename='write-source-edit.js', v='20260917-1') }}"></script>
-  <script src="{{ url_for('static', filename='write-agent.js', v='20260916-1') }}"></script>
+  <script src="{{ url_for('static', filename='write-source-edit.js', v='20261007-1') }}"></script>
+  <script src="{{ url_for('static', filename='card-double-tap.js', v='20261002-1') }}"></script>
+  <script src="{{ url_for('static', filename='write-controls-reveal.js', v='20261001-1') }}"></script>
+  <!-- Lazy: write-agent.js laedt agent-lazy.js beim ersten Aufruf. -->
+  <script type="text/journl-lazy" data-lazy="write-agent.js" src="{{ url_for('static', filename='write-agent.js', v='20260917-2') }}"></script>
+  <script src="{{ url_for('static', filename='agent-lazy.js', v='20260917-1') }}"></script>
   <script src="{{ url_for('static', filename='agent-project-pickers.js', v='20260829-2') }}"></script>
   <script src="{{ url_for('static', filename='agent-projects.js', v='20260915-1') }}"></script>
 </body>

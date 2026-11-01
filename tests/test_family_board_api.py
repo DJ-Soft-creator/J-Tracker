@@ -170,6 +170,31 @@ class FamilyBoardApiTests(unittest.TestCase):
         states = {task["id"]: task["completed"] for task in project["tasks"]}
         self.assertEqual(states, {"t-mine": True, "t-theirs": False})
 
+    def test_accidentally_checked_task_stays_resettable_after_a_reload(self):
+        """Abgehakte Aufgaben fallen aus „Meine Aufgaben“; „Zuletzt erledigt“ fuehrt sie weiter."""
+        self._write_project("geheim", title="Renovierung", type="projekt", assigned_users=["user-b"], tasks=[
+            self._task("t-mine", "Wand streichen", user="user-a"),
+            self._task("t-theirs", "Boden verlegen", user="user-b", completed=True),
+        ])
+        self._write_project("einkauf", title="Wocheneinkauf", template_id="einkaufsliste", tasks=[
+            self._task("i-milch", "Milch", user="user-a", completed=True),
+        ])
+        self.assertEqual(self._board()["recently_completed"], [])
+        self.client.post("/api/family/task/check", headers=self.headers, json={
+            "project_id": "geheim", "task_id": "t-mine", "completed": True,
+        })
+        recent = self._board()["recently_completed"]
+        # Fremde Aufgaben aus gesperrten Dokumenten und Einkaufsartikel bleiben draussen.
+        self.assertEqual([(item["id"], item["origin_id"]) for item in recent], [("t-mine", "geheim")])
+        self.assertEqual(recent[0]["completed_by_display"], "Alex")
+        reset = self.client.post("/api/family/task/check", headers=self.headers, json={
+            "project_id": recent[0]["origin_id"], "task_id": recent[0]["id"], "completed": False,
+        })
+        self.assertEqual(reset.status_code, 200)
+        board = self._board()
+        self.assertEqual(board["recently_completed"], [])
+        self.assertEqual([task["title"] for task in board["personal"]["tasks"]], ["Wand streichen"])
+
     def test_unassigned_bucket_appears_only_when_it_holds_something(self):
         self._write_project("haushalt", title="Haushalt", tasks=[
             self._task("t-open", "Müll rausbringen", user="user-a"),

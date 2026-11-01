@@ -80,6 +80,29 @@ if [ $status -ne 0 ] && [ $known_only -eq 0 ]; then
   [ "$filtered" != "$log" ] && rm -f "$filtered"
 fi
 
+# JS-Syntax auf dem Host pruefen (im DEV-Image fehlt node). Die Python-Tests
+# lesen die Skripte nur als Text: eine doppelt deklarierte Variable legte
+# 5.3.23 die ganze write-voice.js lahm, waehrend alle Tests gruen waren.
+js_status=0
+if [ ${#TARGETS[@]} -eq 0 ] && command -v node >/dev/null; then
+  js_failed=()
+  for js in "$REPO"/app/static/*.js; do
+    case "$js" in *.min.js) continue ;; esac
+    node --check "$js" >/dev/null 2>&1 || js_failed+=("$js")
+  done
+  echo
+  echo "== JS-Syntax (Host, node --check) =="
+  if [ ${#js_failed[@]} -eq 0 ]; then
+    echo "OK"
+  else
+    js_status=1
+    for js in "${js_failed[@]}"; do
+      echo "FEHLER: ${js#"$REPO"/}"
+      node --check "$js" 2>&1 | head -6
+    done
+  fi
+fi
+
 if [ $RUN_DB -eq 1 ]; then
   echo
   echo "== DB-Integrationstests (Wegwerf-Stack) =="
@@ -92,6 +115,7 @@ if [ $RUN_DB -eq 1 ]; then
   rm -f "$dblog"
 fi
 
+[ $js_status -ne 0 ] && exit 1
 # Der bekannte git-Fehler soll den Exit-Code nicht rot färben.
 [ $known_only -eq 1 ] && exit 0
 exit $status

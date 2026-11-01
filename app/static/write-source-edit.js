@@ -67,10 +67,11 @@
   function framedBlock(content) {
     // Family documents carry a YAML frontmatter block (id, title, type, ...)
     // that isn't meant for hand-editing; it rides along unchanged like the
-    // journal quick-entry timestamp below.
+    // journal quick-entry timestamp below
+    // (including the optional travel "Ortszeit" line after its end stamp).
     const frontmatter = String(content || '').match(/^(---\n[\s\S]*?\n---\n\n?)([\s\S]*)$/);
     if (frontmatter) return { body: frontmatter[2], prefix: frontmatter[1], suffix: '' };
-    const quick = String(content || '').match(/^(\s*-\s*(?:\d{2}\.\d{2}\.\s+)?\d{2}:\d{2}:\d{2}\s*\n)([\s\S]*?)(\n\s*~~(?:\d{2}\.\d{2}\.\s+)?\d{2}:\d{2}:\d{2}~~\s*)$/);
+    const quick = String(content || '').match(/^(\s*-\s*(?:\d{2}\.\d{2}\.\s+)?\d{2}:\d{2}:\d{2}\s*\n)([\s\S]*?)(\n\s*~~(?:\d{2}\.\d{2}\.\s+)?\d{2}:\d{2}:\d{2}~~(?:\n\*Ortszeit: [^\n]*\*)?\s*)$/);
     if (quick) return { body: quick[2], prefix: quick[1], suffix: quick[3] };
     const headed = String(content || '').match(/^(\s*#{1,6}\s+.*(?:Datum\s*&\s*Uhrzeit|Datum und Uhrzeit).*\n)([\s\S]*)$/i);
     if (headed) return { body: headed[2], prefix: headed[1], suffix: '' };
@@ -223,9 +224,25 @@
     return { ...framed, body: split.head, mediaTail: split.tail, mediaItems: split.items };
   }
 
+  // „Bearbeiten abbrechen“ steht zusaetzlich ganz oben im „⋯“-Menue. Auf dem
+  // Desktop ist es der einzige Weg: dort bleibt die Leiste bei Senden plus
+  // einem Element fuer alles Weitere, der rote Knopf ist per CSS aus.
+  const menu = window.journlWriteMediaMenu;
+  const menuCancel = document.createElement('button');
+  menuCancel.type = 'button';
+  menuCancel.setAttribute('data-edit-cancel', '');
+  menuCancel.className = 'hidden block w-full px-3 py-2 text-left text-sm text-red-300 hover:bg-red-950/50';
+  menuCancel.textContent = 'Bearbeiten abbrechen';
+  if (menu?.element) menu.element.prepend(menuCancel);
+  menuCancel.addEventListener('click', () => {
+    menu?.close?.();
+    cancelEdit(true);
+  });
+
   function setEditUi(active) {
     document.getElementById('tab-write')?.classList.toggle('write-source-editing', active);
     cancelButton.classList.toggle('hidden', !active);
+    menuCancel.classList.toggle('hidden', !active);
     submitButton.textContent = active ? 'Speichern' : 'Senden';
     for (const option of select.options) {
       const template = window.config?.templates?.find((item) => item.id === option.value);

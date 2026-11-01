@@ -6,12 +6,15 @@ Werkzeuge einbindet. Sie laufen im normalen App-Container auf dem bereits
 veröffentlichten Port — es kommt kein zusätzlicher Dienst und kein weiterer Port
 hinzu.
 
+> Kompakte Fassung für einen externen Agenten (Lesen und Schreiben):
+> [`agent-journl-api.md`](agent-journl-api.md).
+
 ## 1. Zwei getrennte Server
 
 | URL | Inhalt | Recht | Werkzeuge |
 |---|---|---|---|
-| `POST /mcp/privat` (Alias: `/mcp`) | nur die **eigenen Journale** | `mcp` | `list_tags`, `list_days`, `get_blocks`, `get_day`, `search` |
-| `POST /mcp/family` | nur die **Familiendokumente** | `mcp_family` | `list_tags`, `get_blocks` |
+| `POST /mcp/privat` (Alias: `/mcp`) | nur die **eigenen Journale** | `mcp` | `list_tags`, `list_days`, `get_blocks`, `get_day`, `search`, `semantic_search`, `find_similar` |
+| `POST /mcp/family` | nur die **Familiendokumente** | `mcp_family` | `list_tags`, `get_blocks`, `semantic_search`, `find_similar` |
 
 Die Trennung ist beidseitig hart: Jeder Server löst ausschließlich Referenzen
 seiner eigenen Quelle auf, und jeder verlangt sein eigenes Token-Recht. Ein
@@ -144,10 +147,34 @@ und hervorgehobenem Ausschnitt. Argumente: `query` (Pflicht), `tags`,
 `start_date`, `end_date`, `limit` (max. 100), `offset`.
 
 Dieses Werkzeug erscheint nur, wenn der DB-Suchindex aktiv ist
-(`JOURNL_DB_ENABLED`, DEV). Ist er inaktiv, taucht `search` nicht in
-`tools/list` auf; ein trotzdem abgesetzter Aufruf antwortet mit einer
+(`JOURNL_DB_ENABLED`) — in DEV wie in PROD. Ist er inaktiv, taucht `search`
+nicht in `tools/list` auf; ein trotzdem abgesetzter Aufruf antwortet mit einer
 Klartextmeldung statt eines Protokollfehlers. `get_blocks` ist davon
 unabhängig und arbeitet immer datei-basiert.
+
+### `semantic_search` — Suche nach Bedeutung
+
+Findet Stellen nach Bedeutung statt Wortlaut: „wann hatte ich Rückenprobleme“
+findet auch „Bandscheibe zwickt“. Standard ist `hybrid` (Wort- und
+Bedeutungstreffer per RRF gemischt), `semantic` nur die Vektorseite. Argumente:
+`query` (Pflicht), `include` (nur privat: `journal`, `notes`, `agent`; ohne
+Angabe die Auswahl aus den persönlichen Settings), `start_date`, `end_date`,
+`mode`, `limit` (max. 30). Jeder Treffer trägt `path`, `anchor`, `date`, `tags`,
+`text`, `match` (`word`/`semantic`/`both`) und `similarity` (Kosinus, nur bei
+Bedeutungstreffern).
+
+### `find_similar` — ähnliche Einträge
+
+Nimmt `path` und `anchor` eines Treffers und liefert die Blöcke, die ihm
+inhaltlich ähneln, mit seinem gespeicherten Vektor und ohne Modellaufruf. Der
+Ausgangsblock muss im Bereich des Servers liegen: Der Familien-Server lehnt
+private Pfade ab, der private Server Familienpfade.
+
+Beide Werkzeuge erscheinen nur, wenn ein Admin Endpunkt und Embedding-Modell
+eingestellt hat und die Vektor-DB läuft (Burger → Brain → Semantische Suche).
+Zusätzlich muss der Schlüsselinhaber die semantische Suche für sein Konto
+eingeschaltet haben; sonst antworten sie mit einer Klartextmeldung. Die
+Sichtbarkeit ist dieselbe wie im Brain-Tab.
 
 ## 5. Sicherheit
 

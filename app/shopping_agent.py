@@ -33,6 +33,7 @@ import background_runs
 import brain_chat
 import family as family_module
 import mcp_tools
+import shopping_history
 from scheduling import read_text_file, write_text_file
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,13 @@ SYSTEM_PROMPT = (
     "Obst & Gemuese, Kuehlung, Tiefkuehlung, Konserven, Trockenwaren, "
     "Getraenke, Suessigkeiten, Non-Food, Sonstiges.\n"
     "- Fuege nie ungefragt Artikel hinzu und loesche nie ungefragt welche.\n"
+    "- Klassiker ergaenzen: hol dir purchase_history. Klassiker sind Artikel, "
+    "die mindestens zweimal gekauft wurden. Fuege mit add_items die hinzu, die "
+    "faellig sind und nicht schon auf der Liste stehen — Titel genau wie in der "
+    "Historie, je Rubrik ein Aufruf mit deren Rubrik. Ist nichts faellig, sag "
+    "das und nenne die naechsten Kandidaten, statt etwas anzulegen. Ohne "
+    "Historie erfindest du keine Artikel, sondern sagst, dass noch keine "
+    "Einkaeufe erfasst sind.\n"
     "- Rufe Werkzeuge ueber die Tool-Schnittstelle auf, niemals als Text.\n"
     "- Antworte auf Deutsch, in ein bis zwei Saetzen, und sag was du getan "
     "hast. Zaehl nicht die ganze Liste auf — der Nutzer sieht sie selbst.\n"
@@ -243,6 +251,18 @@ TOOLS = [
             "required": ["artikel", "abgehakt"],
         },
     },
+    {
+        "name": "purchase_history",
+        "description": "Was auf dieser Liste frueher gekauft (abgehakt) wurde: je Artikel wie oft, "
+                       "zuletzt wann, im Schnitt alle wie viele Tage, ob er jetzt faellig ist und "
+                       "ob er schon auf der Liste steht. Grundlage fuer 'Klassiker ergaenzen'.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100,
+                                     "description": "Wie viele Artikel hoechstens (Standard 40)"}},
+            "additionalProperties": False,
+        },
+    },
     agent_knowledge.LIST_TOOL,
     agent_knowledge.READ_TOOL,
 ]
@@ -338,7 +358,28 @@ def _tool_remove_items(user_id, project_id, arguments):
         task for task in _items_of(project) if id(task) not in doomed_ids
     ]
     family_module._save_project(project)
+    _remember_bought(project_id, doomed)
     return _state(project, entfernt=titles)
+
+
+def _remember_bought(project_id, tasks):
+    """Abgehakte Artikel vor dem Verschwinden in die Kaufhistorie (best effort)."""
+    try:
+        shopping_history.record(project_id, tasks)
+    except Exception:  # noqa: BLE001 - die Liste ist schon gespeichert
+        logger.warning("Kaufhistorie fuer %s nicht geschrieben", project_id, exc_info=True)
+
+
+def _tool_purchase_history(user_id, project_id, arguments):
+    project = _load_visible(user_id, project_id)
+    limit = arguments.get("limit", shopping_history.DEFAULT_LIMIT)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise mcp_tools.ToolInputError("limit muss eine Zahl von 1 bis 100 sein")
+    now, _unused = family_module._get_tz_aware_now()
+    result = shopping_history.summary(project_id, project, today=now.date(), limit=limit)
+    if not result["artikel"]:
+        result["hinweis"] = "Fuer diese Liste sind noch keine Einkaeufe erfasst."
+    return result
 
 
 def _tool_rename_item(user_id, project_id, arguments):
@@ -384,6 +425,7 @@ _RUNNERS = {
     "remove_items": _tool_remove_items,
     "rename_item": _tool_rename_item,
     "set_completed": _tool_set_completed,
+    "purchase_history": _tool_purchase_history,
     "list_knowledge": _tool_list_knowledge,
     "read_knowledge": _tool_read_knowledge,
 }

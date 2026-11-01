@@ -125,6 +125,17 @@ def _updated_footer(existing_footer, old_tag, new_tag, user_id):
     stamp = tagging_module.footer_ai_run(existing_footer)
     if stamp:
         result["ai_run"] = stamp
+    seen = tagging_module.footer_ai_seen(existing_footer)
+    if seen is not None:
+        result["ai_seen"] = seen
+    # A hashtag the user took back from a model stays taken back under its new name.
+    rejected = {
+        anchor: renamed(tags)
+        for anchor, tags in tagging_module.footer_ai_rejected(existing_footer).items()
+    }
+    rejected = {anchor: tags for anchor, tags in rejected.items() if tags}
+    if rejected:
+        result["ai_rejected"] = rejected
     return result
 
 

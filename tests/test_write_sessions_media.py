@@ -418,6 +418,36 @@ class WriteSessionMediaTests(unittest.TestCase):
         self.assertIn("### Transkript 1 ", journal)
         self.assertIn("### Transkript: Arzttermin ", journal)
 
+    def test_a_star_microphone_recording_keeps_its_engine(self):
+        created = self.create("Sprachnotiz")
+        voice = self.client.post(f"/api/write-sessions/{created['id']}/audio", headers=self.headers,
+                                 json={"mime_type": "audio/wav", "engine": "voice"}).get_json()
+        legacy = self.client.post(f"/api/write-sessions/{created['id']}/audio", headers=self.headers,
+                                  json={"mime_type": "audio/webm", "engine": "irgendwas"}).get_json()
+        self.assertEqual(voice.get("engine"), "voice")
+        self.assertNotIn("engine", legacy)
+
+    def test_a_recording_can_be_transcribed_through_the_local_voice_provider(self):
+        """engine=voice: der Browser schickt die WAV, der MacMini transkribiert."""
+        import voice
+
+        created = self.create("Sprachnotiz")
+        media_id = self._record_audio(created["id"])
+        with mock.patch.object(voice, "resolve_provider", return_value={"id": "lm_mac", "api_url": "http://10.0.0.2:8080/v1/chat/completions"}), \
+             mock.patch.object(voice, "transcribe", return_value="Vom MacMini") as call:
+            response = self.client.post(
+                f"/api/write-sessions/media/{media_id}/transcribe",
+                headers={key: value for key, value in self.headers.items() if key.lower() != "content-type"},
+                data={"engine": "voice", "model": "voice-t", "file": (io.BytesIO(b"RIFFwav"), "a.wav")},
+                content_type="multipart/form-data",
+            )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        item = response.get_json()
+        self.assertEqual(item["transcription_status"], "completed")
+        self.assertEqual(item["transcript_text"], "Vom MacMini")
+        self.assertEqual(call.call_args.args[1], "http://10.0.0.2:8080/v1")
+        self.assertEqual(call.call_args.args[2], "voice-t")
+
     def test_an_immediately_transcribed_recording_is_written_exactly_once(self):
         """Der Editor darf das Transkript nicht zusaetzlich als Text aufnehmen.
 
@@ -448,6 +478,38 @@ class WriteSessionMediaTests(unittest.TestCase):
         # Der Schreiben-Tab kopiert das Ergebnis nicht mehr selbst in den Editor.
         source = (ROOT / "app" / "static" / "write-session.js").read_text(encoding="utf-8")
         self.assertNotIn("appendTranscriptToEditor(updated.transcript_text)", source)
+
+    def test_star_microphone_transcript_is_stored_without_a_second_asr_run(self):
+        """Die Sternchen-Aufnahme legt ihren Rohtext ab; der Chip zeigt ihn."""
+        created = self.create("Verbesserter Text")
+        media_id = self._record_audio(created["id"])
+        with mock.patch.object(main.ai_attachments_module, "_transcribe") as transcribe:
+            response = self.client.post(f"/api/write-sessions/media/{media_id}/transcribe", headers=self.headers,
+                                        json={"transcript": "  aehm roher text  ", "inline": False})
+        transcribe.assert_not_called()
+        self.assertEqual(response.status_code, 200, response.get_json())
+        item = response.get_json()
+        self.assertEqual((item["transcription_status"], item["transcript_text"]), ("completed", "aehm roher text"))
+        self.assertFalse(item["transcript_inline"])
+        self.assertEqual(self.client.post("/api/submit", headers=self.headers, json={
+            "template_id": "schnell", "content": "Verbesserter Text", "write_session_id": created["id"],
+        }).status_code, 200)
+        journal = next((self.data / "u1").rglob("Journal_*.md")).read_text(encoding="utf-8")
+        # Verbessert im Text, Original unter der Aufnahme - beides genau einmal.
+        self.assertEqual(journal.count("Verbesserter Text"), 1)
+        self.assertEqual(journal.count("aehm roher text"), 1)
+
+    def test_inline_star_transcript_is_not_written_twice(self):
+        created = self.create("Genau dieser Satz")
+        media_id = self._record_audio(created["id"])
+        self.client.post(f"/api/write-sessions/media/{media_id}/transcribe", headers=self.headers,
+                         json={"transcript": "Genau dieser Satz", "inline": True})
+        self.assertEqual(self.client.post("/api/submit", headers=self.headers, json={
+            "template_id": "schnell", "content": "Genau dieser Satz", "write_session_id": created["id"],
+        }).status_code, 200)
+        journal = next((self.data / "u1").rglob("Journal_*.md")).read_text(encoding="utf-8")
+        self.assertEqual(journal.count("Genau dieser Satz"), 1)
+        self.assertIn("Sprachnachricht", journal)
 
     def _age_chunks(self, session_id, media_id, minutes=30):
         """Pretend the recorder fell silent -- a killed app stops writing chunks."""
@@ -598,6 +660,11 @@ class WriteSessionMediaTests(unittest.TestCase):
         self.assertEqual(triggered.get_json()["model"], "medium")
         trigger = json.loads((self.data / "whisper_jobs" / "manual" / "u1.json").read_text(encoding="utf-8"))
         self.assertEqual(trigger["model"], "medium")
+
+    def test_a_model_list_in_whisper_model_falls_back_to_its_first_entry(self):
+        with mock.patch.dict(os.environ, {"WHISPER_MODEL": "tiny,base,small,medium"}):
+            self.assertEqual(main.ai_attachments_module.whisper_model(None), "tiny")
+            self.assertEqual(main.ai_attachments_module.whisper_model("small"), "small")
 
     def test_transcription_model_catalogue_survives_an_unreachable_whisper_service(self):
         ai_attachments._MODEL_CATALOG_CACHE.update(fetched_at=0.0, value=None)

@@ -63,6 +63,33 @@ function brainToggleTagExclude(tag) {
 }
 
 
+/**
+ * Von aussen (Hashtag-Map) direkt zu den Eintraegen springen: genau diese
+ * Hashtags als UND-Filter, dazu der Zeitraum. Landet immer in "Timeline &
+ * Suche", weil nur dort je Block gefiltert wird - so wie die Map ihre
+ * Verbindungen zaehlt. Freitext und alte Tag-Filter fallen weg, sonst zeigte
+ * die Liste weniger als die Map versprochen hat.
+ */
+function brainShowTagEntries(tags, start = '', end = '') {
+  brainState.selectedTags.clear();
+  brainState.excludedTags.clear();
+  brainState.anyTags.clear();
+  (tags || []).forEach((tag) => brainState.selectedTags.add(tag));
+  const query = brainElement('brain-query');
+  if (query) query.value = '';
+  brainElement('brain-range-start').value = start || '';
+  brainElement('brain-range-end').value = end || '';
+  updateBrainRangeSummary();
+  if (brainState.mode !== 'search' || brainState.catalogOpen) {
+    setBrainTags(brainState.tags, null);
+    setBrainMode('search');
+    return;
+  }
+  brainApplyTagChange();
+}
+window.brainShowTagEntries = brainShowTagEntries;
+
+
 /** Ein Thema der ODER-Gruppe wieder abwaehlen. */
 function brainRemoveTagTheme(tag) {
   brainState.anyTags.delete(tag);

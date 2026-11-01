@@ -20,6 +20,11 @@ class DatabaseMigrationScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("--confirm dev", result.stderr)
 
+    def test_prod_uses_the_database_profile_for_the_gated_postgres_service(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('--profile database', source)
+        self.assertIn('"$TARGET" == "prod"', source)
+
     def test_invalid_target_is_rejected_before_any_environment_access(self):
         result = subprocess.run(["bash", str(SCRIPT), "staging", "status"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
